@@ -16,7 +16,7 @@ DEFAULT_KEY_TIMEOUT = 500
 
 class KeyInputHandler(object):
 
-    def __init__(self, vim, key, key_conf, key_timeout=None):
+    def __init__(self, vim, key, key_conf, key_timeout=None, ofd=None):
         self._key = key
         self._key_conf = key_conf
         self._vim = vim
@@ -25,7 +25,17 @@ class KeyInputHandler(object):
         self._key_timeout = key_timeout or DEFAULT_KEY_TIMEOUT
         self._matching = False
 
-        self._dfile = open('/tmp/dtout.text', "a")
+        self._dfile = ofd
+        self._dfile.write("KeyInputHandler init: %s %s\n" % (key, key_conf))
+
+        # XXX(jeffbuttars) Big fat hack for now for the '"' case.
+        if key == '"':
+            imap = "imap <silent> %s <C-R>=DoubleTapInsert('%s')<CR>" % (key, key)
+        else:
+            imap = "imap <silent> %s <C-R>=DoubleTapInsert(\"%s\")<CR>" % (key, key)
+
+        self._dfile.write(imap + "\n")
+        self._vim.command(imap)
 
     def __str__(self):
         return "KeyInputHandler key: %s, key_conf: %s" % (self._key, self._key_conf)
@@ -94,7 +104,8 @@ class DoubleTap(object):
         self._vim.command("echo 'garbage!!! %s'" % filename)
 
         for k, v in insert_map.items():
-            self.init_insert_key(k, v)
+            self._insert_key_handlers[k] = KeyInputHandler(self._vim, k, v, ofd=self._dfile)
+            self._dfile.write("autocmd_handler initializing %s : %s \n" % (k, v))
 
     @neovim.function('DoubleTapInsert', sync=True)
     def double_tap_insert(self, args):
@@ -105,21 +116,5 @@ class DoubleTap(object):
             return
 
         handler = self._insert_key_handlers.get(key)
-
-        self._dfile.write("init_insert_key key: %s handler: %s \n" % (key, handler))
-
+        self._dfile.write("double_tap_insert key: %s handler: %s \n" % (key, handler))
         return (handler and handler.trigger()) or key
-
-    def init_insert_key(self, key, key_conf):
-        self._insert_key_handlers[key] = KeyInputHandler(self._vim, key, key_conf)
-
-        self._dfile.write("init_insert_key %s : %s \n" % (key, key_conf))
-
-        # XXX(jeffbuttars) Big fat hack for now for the '"' case.
-        if key == '"':
-            imap = "imap <silent> %s <C-R>=DoubleTapInsert('%s')<CR>" % (key, key)
-        else:
-            imap = "imap <silent> %s <C-R>=DoubleTapInsert(\"%s\")<CR>" % (key, key)
-
-        self._dfile.write(imap + "\n")
-        self._vim.command(imap)
