@@ -47,12 +47,13 @@ class KeyInputHandler(object):
 
             # This is our 'critical section'
             res = self.perform()
+            self._dfile.write("trigger perform result: '%s'\n" % res)
 
             self._matching = False
             self._last_key_time = 0
             return res
 
-        self._dfile.write("double_tap_insert BOTTOM key: %s\n" % key)
+        self._dfile.write("trigger BOTTOM key: %s\n" % key)
         self._last_key_time = now
         return key
 
@@ -120,15 +121,26 @@ class FinishLineHandler(KeyInputHandler):
         buf = self._vim.current.buffer
         ln = pos[0] - 1
         c = pos[1]
+
+        self._dfile.write("double_finish_line : cur line '%s' %s\n" % (buf[ln], len(buf[ln])))
+        self._dfile.write("double_finish_line : cur char '%s'\n" % (buf[ln][c],))
         line = buf[ln].rstrip()
+        line = line[:(c-1)] + line[(c):]
 
-        if line[-1] != self._key:
+        if line and line[-1] != self._key:
             line += self._key
+        elif not line:
+            line = self._key
 
-        c = min(c, len(line))
+        c = min(c, (len(line) - 1))
         buf[ln] = line
 
-        return line[c]
+        self._dfile.write("double_finish_line : new line '%s' %s\n" % (line, len(line)))
+        self._dfile.write("double_finish_line : column %s\n" % c)
+
+        pos = self._vim.current.window.cursor = (pos[0], max(0, pos[1] - 1))
+
+        return ''
 
 
 @neovim.plugin
@@ -174,7 +186,9 @@ class DoubleTap(object):
         if key == self._last_key:
             handler = handlers.get(key)
             self._dfile.write("dispatch key: %s handler: %s \n" % (key, handler))
-            res = (handler and handler.trigger(self._last_key)) or key
+            res = handler and handler.trigger(self._last_key) or ''
+
+            self._dfile.write("dispatch key: %s result: '%s' \n" % (key, res))
 
         self._last_key = key
         return res
@@ -182,11 +196,7 @@ class DoubleTap(object):
     @neovim.function('DoubleTapInsert', sync=True)
     def double_tap_insert(self, args):
         return self.dispatch(args, self._insert_key_handlers)
-        #  handler = self._insert_key_handlers.get(key)
-        #  self._dfile.write("double_tap_insert key: %s handler: %s \n" % (key, handler))
-        #  return (handler and handler.trigger()) or key
 
-    #  @neovim.function('DoubleTapFinishLine', sync=True)
-    @neovim.function('DoubleTapFinishLine', sync=False)
+    @neovim.function('DoubleTapFinishLine', sync=True)
     def double_tap_finish_line(self, args):
         return self.dispatch(args, self._finish_key_handlers)
