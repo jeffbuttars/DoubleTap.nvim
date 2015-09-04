@@ -46,21 +46,25 @@ class KeyInputHandler(object):
         """Returns a new line without the unwanted input character
         as the result of a double tap.
         """
-        self._dfile.write("KeyInputHandler patch line: %s, pos: %s, mode: %s\n" % (
+        self._dfile.write("TapOut original line: '%s', pos: %s\n" % (line, pos))
+
+        self._dfile.write("KeyInputHandler patch o-line: '%s', pos: %s, mode: %s\n" % (
             line, pos, mode))
 
         if mode:
             m = self._vim.eval('mode()').lower()
             if mode != m:
+                self._dfile.write("KeyInputHandler mode mismatch %s:%s\n" % (mode, m))
                 return line
 
             if mode == 'i':
                 self._vim.current.window.cursor = (pos[0], max(0, pos[1] - 1))
 
         col = pos[1]
-        if len(line) > col:
+        if len(line) >= col:
             line = line[:(col - 1)] + line[col:]
 
+        self._dfile.write("KeyInputHandler patched line: '%s'\n" % (line,))
         return line
 
     def trigger(self, last_key):
@@ -71,7 +75,7 @@ class KeyInputHandler(object):
 
         if self._matching:
             # We're being fed keys while processing a doubleTap event, so ignore them
-            self._dfile.write("double_tap_insert already matching key: %s\n" % key)
+            self._dfile.write("trigger already matching key: %s\n" % key)
             return key
 
         # for the time being, we only handle simple pairs of keys, so pass
@@ -80,7 +84,13 @@ class KeyInputHandler(object):
             self._matching = True
 
             # This is our 'critical section'
-            res = self.perform()
+            try:
+                res = self.perform()
+            finally:
+                # reset our state, let the exception be handled further up
+                self._matching = False
+                self._last_key_time = 0
+
             self._dfile.write("trigger perform result: '%s'\n" % res)
 
             self._matching = False
@@ -216,11 +226,33 @@ class TapOutHandler(KeyInputHandler):
 
         line = self._patch_line(line, pos, mode='i')
 
-        #  self._dfile.write("TapOut patched line: %s, pos: %s\n" % (line, pos))
+        # If we're sigging on the left char of the match, move over one
+        # We have be carefull about the first and last chars
+        c = max(0, min(pos[1] - 1, len(line) - 1))
+
+        self._dfile.write("checking line: '%s', c: %s, len: %s \n" % (line, c, len(line)))
+
+        if line[c] == self._lkey:
+            self._vim.current.window.cursor = (pos[0], (pos[1] + 1))
+            pos = self._vim.current.window.cursor
+
+        buf[ln] = line
+        c = max(0, min(pos[1] - 1, len(line) - 1))
+        self._dfile.write("checking line: '%s', c: %s, len: %s \n" % (line, c, len(line)))
 
         # If we're sitting on the char, just move over one!
-        if line[pos[1] - 1] == self._rkey:
-            buf[ln] = line
+        if line[c] == self._rkey:
+            self._vim.current.window.cursor = (pos[0], (pos[1] + 1))
+            return ""
+
+        # Vim has some built funcs to help us with this. If we're in a matching
+        # pair, witch is likely, it will do the jump for us!
+        sres = int(self._vim.eval("searchpair('%s', '', '%s', 'W')" % (self._lkey, self._rkey)))
+        if sres > 0:
+            self._dfile.write("TapOut patched Vim jump! %s\n" % sres)
+            # We jumped.
+            #  call s:advCursorAndMatch( 1, [ [ l:cpos[1], l:cpos[2]-1 ] ] )
+            pos = self._vim.current.window.cursor
             self._vim.current.window.cursor = (pos[0], (pos[1] + 1))
             return ""
 
