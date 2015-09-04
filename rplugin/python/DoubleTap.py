@@ -10,6 +10,15 @@ insert_map = {
         "<": {'l': "<", 'r': ">"},
         }
 
+jump_map = {
+        ")": {"l": "(", "r": ")"},
+        "}": {'l': "{", 'r': "}"},
+        "]": {'l': "[", 'r': "]"},
+        ">": {'l': "<", 'r': ">"},
+        #  '"': {"l": '"', "r": '"', 'sym': True},  # Symetric : True
+        #  "'": {'l': "'", 'r': "'", 'sym': True},
+        }
+
 
 finishers_map = (';', ',')
 DEFAULT_KEY_TIMEOUT = 750
@@ -32,6 +41,27 @@ class KeyInputHandler(object):
 
     def __str__(self):
         return "KeyInputHandler key: %s, key_conf: %s" % (self._key, self._key_conf)
+
+    def _patch_line(self, line, pos, mode=None):
+        """Returns a new line without the unwanted input character
+        as the result of a double tap.
+        """
+        self._dfile.write("KeyInputHandler patch line: %s, pos: %s, mode: %s\n" % (
+            line, pos, mode))
+
+        if mode:
+            m = self._vim.eval('mode()').lower()
+            if mode != m:
+                return line
+
+            if mode == 'i':
+                self._vim.current.window.cursor = (pos[0], max(0, pos[1] - 1))
+
+        col = pos[1]
+        if len(line) > col:
+            line = line[:(col - 1)] + line[col:]
+
+        return line
 
     def trigger(self, last_key):
 
@@ -114,7 +144,7 @@ class FinishLineHandler(KeyInputHandler):
         self._dfile.write(imap + "\n")
         self._vim.command(imap)
 
-        imap = "nmap %s <ESC>:call DoubleTapFinishLineNormal('%s')<CR>" % (key, key)
+        imap = "nmap <silent> %s <ESC>:call DoubleTapFinishLineNormal('%s')<CR>" % (key, key)
         self._dfile.write(imap + "\n")
         self._vim.command(imap)
 
@@ -123,11 +153,10 @@ class FinishLineHandler(KeyInputHandler):
 
     def perform(self):
         pos = self._vim.current.window.cursor
-        mode = self._vim.eval('mode()').lower()
 
         self._dfile.write("double_finish_line key: %s\n" % self._key)
         self._dfile.write("double_finish_line : window pos %s\n" % pos)
-        self._dfile.write("double_finish_line : mode %s\n" % mode)
+        #  self._dfile.write("double_finish_line : mode %s\n" % mode)
 
         buf = self._vim.current.buffer
         ln = pos[0] - 1
@@ -144,20 +173,48 @@ class FinishLineHandler(KeyInputHandler):
         elif not line:
             line = self._key
 
-        if mode == 'i' and len(line) > c:
-            line = line[:(c-1)] + line[(c):]
+        #  if mode == 'i' and len(line) > c:
+        #  if mode == 'i':
+            #  line = line[:(c-1)] + line[c:]
+            #  line = self._patch_line(line, c)
+        line = self._patch_line(line, pos, mode='i')
 
-        c = max(0, min(c, (len(line) - 1)))
+        #  c = max(0, min(c, (len(line) - 1)))
 
         buf[ln] = line
 
         self._dfile.write("double_finish_line : new line '%s' %s\n" % (line, len(line)))
         self._dfile.write("double_finish_line : column %s\n" % c)
 
-        if mode == 'i':
-            pos = self._vim.current.window.cursor = (pos[0], max(0, pos[1] - 1))
+        #  if mode == 'i':
+        #      self._vim.current.window.cursor = (pos[0], max(0, pos[1] - 1))
 
         return ''
+
+
+class TapOutHandler(KeyInputHandler):
+    def __init__(self, vim, key, key_conf, key_timeout=None, ofd=None):
+        super(TapOutHandler, self).__init__(
+                vim, key, key_conf, key_timeout=key_timeout, ofd=ofd)
+
+        self._lkey = key_conf.get('l')
+        self._rkey = key_conf.get('r')
+        self._is_sym = key_conf.get('sym', False)
+
+        if key == '"':
+            imap = "imap <silent> %s <C-R>=DoubleTapOut('%s', '%s')<CR>" % (self._lkey, self._rkey)
+        else:
+            imap = "imap <silent> %s <C-R>=DoubleTapOut(\"%s\", \"%s\")<CR>" % (
+                    self._lkey, self._rkey)
+
+        self._dfile.write(imap + "\n")
+        self._vim.command(imap)
+
+    def __str__(self):
+        return "TapOutHandler key: %s, key_conf: %s" % (self._key, self._key_conf)
+
+    def perform(self):
+        pass
 
 
 @neovim.plugin
@@ -237,6 +294,10 @@ class DoubleTap(object):
     @neovim.function('DoubleTapInsert', sync=True)
     def double_tap_insert(self, args):
         return self.dispatch(args, self._insert_key_handlers)
+
+    @neovim.function('DoubleTapOut', sync=True)
+    def double_tap_out(self, args):
+        return self.dispatch(args, self._jump_key_handlers)
 
     @neovim.function('DoubleTapFinishLine', sync=True)
     def double_tap_finish_line(self, args):
