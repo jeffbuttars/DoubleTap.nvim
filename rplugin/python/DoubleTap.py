@@ -10,6 +10,7 @@ insert_map = {
         "<": {'l': "<", 'r': ">"},
         }
 
+
 finishers_map = (';', ',')
 DEFAULT_KEY_TIMEOUT = 750
 
