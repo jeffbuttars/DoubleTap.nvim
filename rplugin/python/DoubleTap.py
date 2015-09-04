@@ -28,15 +28,6 @@ class KeyInputHandler(object):
         self._dfile = ofd
         self._dfile.write("KeyInputHandler init: %s %s\n" % (key, key_conf))
 
-        # XXX(jeffbuttars) Big fat hack for now for the '"' case.
-        if key == '"':
-            imap = "imap <silent> %s <C-R>=DoubleTapInsert('%s')<CR>" % (key, key)
-        else:
-            imap = "imap <silent> %s <C-R>=DoubleTapInsert(\"%s\")<CR>" % (key, key)
-
-        self._dfile.write(imap + "\n")
-        self._vim.command(imap)
-
     def __str__(self):
         return "KeyInputHandler key: %s, key_conf: %s" % (self._key, self._key_conf)
 
@@ -79,6 +70,30 @@ class KeyInputHandler(object):
         self._last_key_time = now
         return key
 
+    #  def perform(self):
+    #      """todo: Docstring for perform
+    #      :returns: @todo
+    #      """
+    
+    #      pass
+
+
+class InsertHandler(KeyInputHandler):
+    def __init__(self, vim, key, key_conf, key_timeout=None, ofd=None):
+        super(InsertHandler, self).__init__(vim, key, key_conf, key_timeout=key_timeout, ofd=ofd)
+
+        # XXX(jeffbuttars) Big fat hack for now for the '"' case.
+        if key == '"':
+            imap = "imap <silent> %s <C-R>=DoubleTapInsert('%s')<CR>" % (key, key)
+        else:
+            imap = "imap <silent> %s <C-R>=DoubleTapInsert(\"%s\")<CR>" % (key, key)
+
+        self._dfile.write(imap + "\n")
+        self._vim.command(imap)
+
+    def __str__(self):
+        return "InsertHandler key: %s, key_conf: %s" % (self._key, self._key_conf)
+
 
 @neovim.plugin
 class DoubleTap(object):
@@ -104,7 +119,7 @@ class DoubleTap(object):
         self._vim.command("echo 'garbage!!! %s'" % filename)
 
         for k, v in insert_map.items():
-            self._insert_key_handlers[k] = KeyInputHandler(self._vim, k, v, ofd=self._dfile)
+            self._insert_key_handlers[k] = InsertHandler(self._vim, k, v, ofd=self._dfile)
             self._dfile.write("autocmd_handler initializing %s : %s \n" % (k, v))
 
     @neovim.function('DoubleTapInsert', sync=True)
