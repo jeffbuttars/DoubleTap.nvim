@@ -173,13 +173,7 @@ class FinishLineHandler(KeyInputHandler):
         elif not line:
             line = self._key
 
-        #  if mode == 'i' and len(line) > c:
-        #  if mode == 'i':
-            #  line = line[:(c-1)] + line[c:]
-            #  line = self._patch_line(line, c)
         line = self._patch_line(line, pos, mode='i')
-
-        #  c = max(0, min(c, (len(line) - 1)))
 
         buf[ln] = line
 
@@ -202,10 +196,11 @@ class TapOutHandler(KeyInputHandler):
         self._is_sym = key_conf.get('sym', False)
 
         if key == '"':
-            imap = "imap <silent> %s <C-R>=DoubleTapOut('%s', '%s')<CR>" % (self._lkey, self._rkey)
+            imap = "imap <silent> %s <C-R>=DoubleTapOut('%s')<CR>" % (
+                    self._key, self._key)
         else:
-            imap = "imap <silent> %s <C-R>=DoubleTapOut(\"%s\", \"%s\")<CR>" % (
-                    self._lkey, self._rkey)
+            imap = "imap <silent> %s <C-R>=DoubleTapOut(\"%s\")<CR>" % (
+                    self._key, self._key)
 
         self._dfile.write(imap + "\n")
         self._vim.command(imap)
@@ -214,7 +209,22 @@ class TapOutHandler(KeyInputHandler):
         return "TapOutHandler key: %s, key_conf: %s" % (self._key, self._key_conf)
 
     def perform(self):
-        pass
+        pos = self._vim.current.window.cursor
+        buf = self._vim.current.buffer
+        ln = pos[0] - 1
+        line = buf[ln]
+
+        line = self._patch_line(line, pos, mode='i')
+
+        #  self._dfile.write("TapOut patched line: %s, pos: %s\n" % (line, pos))
+
+        # If we're sitting on the char, just move over one!
+        if line[pos[1] - 1] == self._rkey:
+            buf[ln] = line
+            self._vim.current.window.cursor = (pos[0], (pos[1] + 1))
+            return ""
+
+        return self._key 
 
 
 @neovim.plugin
@@ -233,6 +243,7 @@ class DoubleTap(object):
 
         self._insert_key_handlers = {}
         self._finish_key_handlers = {}
+        self._jump_key_handlers = {}
 
         self._insert_timer = 0
         #  self._insert_timer = int(self.lookup_var("g:DoubleTapInsertTimer", DEFAULT_KEY_TIMEOUT))
@@ -267,6 +278,11 @@ class DoubleTap(object):
                     self._vim, f, {},
                     key_timeout=self._insert_timer, ofd=self._dfile)
 
+        for k, v in jump_map.items():
+            self._jump_key_handlers[k] = TapOutHandler(
+                    self._vim, k, v,
+                    key_timeout=self._insert_timer, ofd=self._dfile)
+
     def dispatch(self, args, handlers):
         try:
             key = args[0]
@@ -274,13 +290,17 @@ class DoubleTap(object):
             # Ignore and carry on. This would be a very strange scenario
             return
 
-        self._dfile.write("dispatch key: '%s' last_key: '%s' \n" % (key, self._last_key))
+        self._dfile.write("dispatch args: %s, key: '%s' last_key: '%s' \n" % (args, key, self._last_key))
         res = key
 
         handler = handlers.get(key)
         self._dfile.write("dispatch key: %s handler: %s \n" % (key, handler))
+
+        if not handler:
+            return key
+
         try:
-            res = handler and handler.trigger(self._last_key) or ''
+            res = handler.trigger(self._last_key)
         except Exception:
             import traceback
             self._dfile.write("EXECPTION\n%s\n" % (traceback.format_exc(),))
