@@ -34,15 +34,17 @@ class KeyInputHandler(object):
     def trigger(self, last_key):
 
         key = self._key
+        # time since epoch in milliseconds
+        now = int(time.time() * 1000)
+
         if self._matching:
             # We're being fed keys while processing a doubleTap event, so ignore them
             self._dfile.write("double_tap_insert already matching key: %s\n" % key)
             return key
 
-        # time since epoch in milliseconds
-        now = int(time.time() * 1000)
-
-        if now - self._last_key_time < self._key_timeout:
+        # for the time being, we only handle simple pairs of keys, so pass
+        # on anything that doesn't match the last key.
+        if key == last_key and now - self._last_key_time < self._key_timeout:
             self._matching = True
 
             # This is our 'critical section'
@@ -151,8 +153,6 @@ class DoubleTap(object):
         print("__init__")
         self._vim = vim
         self._last_key = ''
-        self._last_key_time = int(time.time() * 1000)
-        self._matching = False
 
         #  self._buf = self._vim.current.buffer
         self._dfile = open('/tmp/dtout.text', "a")
@@ -181,14 +181,14 @@ class DoubleTap(object):
             # Ignore and carry on. This would be a very strange scenario
             return
 
-        self._dfile.write("dispatch key: %s last_key: %s \n" % (key, self._last_key))
+        self._dfile.write("dispatch key: '%s' last_key: '%s' \n" % (key, self._last_key))
         res = key
-        if key == self._last_key:
-            handler = handlers.get(key)
-            self._dfile.write("dispatch key: %s handler: %s \n" % (key, handler))
-            res = handler and handler.trigger(self._last_key) or ''
 
-            self._dfile.write("dispatch key: %s result: '%s' \n" % (key, res))
+        handler = handlers.get(key)
+        self._dfile.write("dispatch key: %s handler: %s \n" % (key, handler))
+        res = handler and handler.trigger(self._last_key) or ''
+
+        self._dfile.write("dispatch key: %s result: '%s' \n" % (key, res))
 
         self._last_key = key
         return res
