@@ -45,37 +45,29 @@ class KeyInputHandler(object):
         if now - self._last_key_time < self._key_timeout:
             self._last_key_time = now
 
-            pos = self._vim.current.window.cursor
-            self._dfile.write("double_tap_insert key: %s\n" % key)
-            self._dfile.write("double_tap_insert : window pos %s\n" % pos)
-
-            buf = self._vim.current.buffer
-            ln = pos[0] - 1
-            line = buf[ln]
-            lp = pos[1]
 
             self._matching = True
-            self._last_key_time = 0
-            bl = line[:lp - 1]
-            el = line[lp:]
-            self._dfile.write("double_tap_insert : line %s\n" % ln)
-            buf[ln] = bl + insert_map[key]['r'] + el
-            self._vim.current.window.cursor = (pos[0], lp - 1)
-            self._matching = False
 
-            return insert_map[key]['l']
+            res = self.perform()
+
+            self._matching = False
+            self._last_key_time = 0
+
+            return res
 
         self._dfile.write("double_tap_insert BOTTOM key: %s\n" % key)
         #  self._matching = False
         self._last_key_time = now
         return key
 
-    #  def perform(self):
-    #      """todo: Docstring for perform
-    #      :returns: @todo
-    #      """
-    
-    #      pass
+    def perform(self):
+        """
+        This is where the 'critical section' work is performed.
+        Do the workin in `perform()` that will change the buffer when a 
+        doubleTap event has occurred.
+        Whatever `perform` returns will be written in the current buffer and the current position
+        """
+        raise NotImplementedError("perform() must be overriden")
 
 
 class InsertHandler(KeyInputHandler):
@@ -93,6 +85,23 @@ class InsertHandler(KeyInputHandler):
 
     def __str__(self):
         return "InsertHandler key: %s, key_conf: %s" % (self._key, self._key_conf)
+
+    def perform(self):
+        pos = self._vim.current.window.cursor
+        self._dfile.write("double_tap_insert key: %s\n" % self._key)
+        self._dfile.write("double_tap_insert : window pos %s\n" % pos)
+
+        buf = self._vim.current.buffer
+        ln = pos[0] - 1
+        line = buf[ln]
+        lp = pos[1]
+        bl = line[:lp - 1]
+        el = line[lp:]
+        self._dfile.write("double_tap_insert : line %s\n" % ln)
+        buf[ln] = bl + self._key_conf['r'] + el
+        self._vim.current.window.cursor = (pos[0], lp - 1)
+
+        return self._key_conf['l']
 
 
 @neovim.plugin
