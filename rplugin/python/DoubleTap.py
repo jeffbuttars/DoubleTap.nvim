@@ -27,7 +27,8 @@ class KeyInputHandler(object):
         self._matching = False
 
         self._dfile = ofd
-        self._dfile.write("KeyInputHandler init: %s %s\n" % (key, key_conf))
+        self._dfile.write("KeyInputHandler init: %s %s, timer: %s\n" % (
+            key, key_conf, self._key_timeout))
 
     def __str__(self):
         return "KeyInputHandler key: %s, key_conf: %s" % (self._key, self._key_conf)
@@ -176,17 +177,38 @@ class DoubleTap(object):
         self._insert_key_handlers = {}
         self._finish_key_handlers = {}
 
+        self._insert_timer = 0
+        #  self._insert_timer = int(self.lookup_var("g:DoubleTapInsertTimer", DEFAULT_KEY_TIMEOUT))
+
+        self._insert_timer = self._insert_timer or DEFAULT_KEY_TIMEOUT
+        self._dfile.write("Instatiating... timer %s\n" % self._insert_timer)
+
+    def lookup_var(self, vname, *args):
+        defa = None
+        if args:
+            defa = args[0]
+
+        exists = self._vim.eval('exists("%s")' % vname)
+        if exists:
+            return self._vim.eval("%s" % vname)
+
+        return defa
+
     @neovim.autocmd('BufEnter', pattern='*', eval='expand("<afile>")', sync=True)
     def autocmd_handler(self, filename):
         #  self._vim.current.line = "garbage!!! " + filename
         self._vim.command("echo 'garbage!!! %s'" % filename)
 
         for k, v in insert_map.items():
-            self._insert_key_handlers[k] = InsertHandler(self._vim, k, v, ofd=self._dfile)
+            self._insert_key_handlers[k] = InsertHandler(
+                    self._vim, k, v,
+                    key_timeout=self._insert_timer, ofd=self._dfile)
             self._dfile.write("autocmd_handler initializing %s : %s \n" % (k, v))
 
         for f in finishers_map:
-            self._finish_key_handlers[f] = FinishLineHandler(self._vim, f, {}, ofd=self._dfile)
+            self._finish_key_handlers[f] = FinishLineHandler(
+                    self._vim, f, {},
+                    key_timeout=self._insert_timer, ofd=self._dfile)
 
     def dispatch(self, args, handlers):
         try:
