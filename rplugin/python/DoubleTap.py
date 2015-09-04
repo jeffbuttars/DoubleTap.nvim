@@ -112,35 +112,48 @@ class FinishLineHandler(KeyInputHandler):
         self._dfile.write(imap + "\n")
         self._vim.command(imap)
 
+        imap = "nmap %s <ESC>:call DoubleTapFinishLineNormal('%s')<CR>" % (key, key)
+        self._dfile.write(imap + "\n")
+        self._vim.command(imap)
+
     def __str__(self):
         return "FinishLineHandler key: %s, key_conf: %s" % (self._key, self._key_conf)
 
     def perform(self):
         pos = self._vim.current.window.cursor
+        mode = self._vim.eval('mode()').lower()
+
         self._dfile.write("double_finish_line key: %s\n" % self._key)
         self._dfile.write("double_finish_line : window pos %s\n" % pos)
+        self._dfile.write("double_finish_line : mode %s\n" % mode)
 
         buf = self._vim.current.buffer
         ln = pos[0] - 1
         c = pos[1]
 
         self._dfile.write("double_finish_line : cur line '%s' %s\n" % (buf[ln], len(buf[ln])))
-        self._dfile.write("double_finish_line : cur char '%s'\n" % (buf[ln][c],))
-        line = buf[ln].rstrip()
-        line = line[:(c-1)] + line[(c):]
+        if buf[ln]:
+            self._dfile.write("double_finish_line : cur char '%s'\n" % (buf[ln][c - 1],))
 
-        if line and line[-1] != self._key:
+        line = buf[ln].rstrip()
+
+        if line and (line[-1] != self._key):
             line += self._key
         elif not line:
             line = self._key
 
-        c = min(c, (len(line) - 1))
+        if mode == 'i' and len(line) > c:
+            line = line[:(c-1)] + line[(c):]
+
+        c = max(0, min(c, (len(line) - 1)))
+
         buf[ln] = line
 
         self._dfile.write("double_finish_line : new line '%s' %s\n" % (line, len(line)))
         self._dfile.write("double_finish_line : column %s\n" % c)
 
-        pos = self._vim.current.window.cursor = (pos[0], max(0, pos[1] - 1))
+        if mode == 'i':
+            pos = self._vim.current.window.cursor = (pos[0], max(0, pos[1] - 1))
 
         return ''
 
@@ -186,7 +199,12 @@ class DoubleTap(object):
 
         handler = handlers.get(key)
         self._dfile.write("dispatch key: %s handler: %s \n" % (key, handler))
-        res = handler and handler.trigger(self._last_key) or ''
+        try:
+            res = handler and handler.trigger(self._last_key) or ''
+        except Exception:
+            import traceback
+            self._dfile.write("EXECPTION\n%s\n" % (traceback.format_exc(),))
+            return key
 
         self._dfile.write("dispatch key: %s result: '%s' \n" % (key, res))
 
@@ -199,4 +217,8 @@ class DoubleTap(object):
 
     @neovim.function('DoubleTapFinishLine', sync=True)
     def double_tap_finish_line(self, args):
+        return self.dispatch(args, self._finish_key_handlers)
+
+    @neovim.function('DoubleTapFinishLineNormal', sync=True)
+    def double_tap_finish_line_normal(self, args):
         return self.dispatch(args, self._finish_key_handlers)
