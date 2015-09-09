@@ -5,7 +5,7 @@ insert_map = {
         "(": {"l": "(", "r": ")"},
         '"': {"l": '"', "r": '"'},
         "'": {'l': "'", 'r': "'"},
-        "{": {'l': "{", 'r': "}"},
+        "{": {'l': "{", 'r': "}", 'mode': 'triggered'},
         "[": {'l': "[", 'r': "]"},
         "<": {'l': "<", 'r': ">"},
         }
@@ -21,7 +21,17 @@ jump_map = {
 
 
 finishers_map = (';', ',')
+
+# future configurable, in MS
+# configurable per map will be available
 DEFAULT_KEY_TIMEOUT = 750
+
+# Future configurable input modes for insert
+# configurable per map will be available
+# Generally, stream mode is good for single line inserts and
+# triggered is good for multiline inserts, ie: {}
+INPUT_MODES = ('stream', 'triggered')
+INPUT_MODE = INPUT_MODES[1]
 
 
 class KeyInputHandler(object):
@@ -38,6 +48,8 @@ class KeyInputHandler(object):
         self._dfile = ofd
         self._dfile.write("KeyInputHandler init: %s %s, timer: %s\n" % (
             key, key_conf, self._key_timeout))
+
+        self.event_proc = self.stream
 
     def __str__(self):
         return "KeyInputHandler key: %s, key_conf: %s" % (self._key, self._key_conf)
@@ -67,7 +79,7 @@ class KeyInputHandler(object):
         self._dfile.write("KeyInputHandler patched line: '%s'\n" % (line,))
         return line
 
-    def trigger(self, last_key):
+    def stream(self, last_key):
 
         key = self._key
         # time since epoch in milliseconds
@@ -75,7 +87,7 @@ class KeyInputHandler(object):
 
         if self._matching:
             # We're being fed keys while processing a doubleTap event, so ignore them
-            self._dfile.write("trigger already matching key: %s\n" % key)
+            self._dfile.write("stream already matching key: %s\n" % key)
             return key
 
         # for the time being, we only handle simple pairs of keys, so pass
@@ -85,30 +97,31 @@ class KeyInputHandler(object):
 
             # This is our 'critical section'
             try:
-                res = self.perform()
+                res = self.stream_perform()
             finally:
                 # reset our state, let the exception be handled further up
                 self._matching = False
                 self._last_key_time = 0
 
-            self._dfile.write("trigger perform result: '%s'\n" % res)
+            self._dfile.write("stream perform result: '%s'\n" % res)
 
             self._matching = False
             self._last_key_time = 0
             return res
 
-        self._dfile.write("trigger BOTTOM key: %s\n" % key)
+        self._dfile.write("stream BOTTOM key: %s\n" % key)
         self._last_key_time = now
         return key
 
-    def perform(self):
+    def stream_perform(self):
         """
         This is where the 'critical section' work is performed.
-        Do the workin in `perform()` that will change the buffer when a 
+        Do the workin in `stream_perform()` that will change the buffer when a 
         doubleTap event has occurred.
-        Whatever `perform` returns will be written in the current buffer and the current position
+        Whatever `stream_perform` returns will be written in the current
+        buffer and the current position
         """
-        raise NotImplementedError("perform() must be overriden")
+        raise NotImplementedError("stream_perform() must be overriden")
 
 
 class InsertHandler(KeyInputHandler):
@@ -127,7 +140,7 @@ class InsertHandler(KeyInputHandler):
     def __str__(self):
         return "InsertHandler key: %s, key_conf: %s" % (self._key, self._key_conf)
 
-    def perform(self):
+    def stream_perform(self):
         pos = self._vim.current.window.cursor
         self._dfile.write("double_tap_insert key: %s\n" % self._key)
         self._dfile.write("double_tap_insert : window pos %s\n" % pos)
@@ -161,7 +174,7 @@ class FinishLineHandler(KeyInputHandler):
     def __str__(self):
         return "FinishLineHandler key: %s, key_conf: %s" % (self._key, self._key_conf)
 
-    def perform(self):
+    def stream_perform(self):
         pos = self._vim.current.window.cursor
 
         self._dfile.write("double_finish_line key: %s\n" % self._key)
@@ -218,7 +231,7 @@ class TapOutHandler(KeyInputHandler):
     def __str__(self):
         return "TapOutHandler key: %s, key_conf: %s" % (self._key, self._key_conf)
 
-    def perform(self):
+    def stream_perform(self):
         pos = self._vim.current.window.cursor
         buf = self._vim.current.buffer
         ln = pos[0] - 1
@@ -316,13 +329,28 @@ class DoubleTap(object):
                     key_timeout=self._insert_timer, ofd=self._dfile)
 
     def dispatch(self, args, handlers):
+        """
+        Handle the key input of the mapped trigger keys.
+        The event is dispatched to the proper handler which is passed in.
+
+        There are two input modes, stream and triggerd.
+
+        In stream mode the keys are inserted as they're typed. If a double tap event
+        occurs, then the line is retroactively edited to reflect the pair input.
+
+        In triggerd mode, when the first trigger input is received, it's buffered until it's 
+        determined that a double tap event won't happen, or of course the double tap event
+        occurs. When the state is resolved, the insert will happen.
+        """
         try:
             key = args[0]
         except KeyError:
             # Ignore and carry on. This would be a very strange scenario
             return
 
-        self._dfile.write("dispatch args: %s, key: '%s' last_key: '%s' \n" % (args, key, self._last_key))
+        self._dfile.write(
+                "dispatch args: %s, key: '%s' last_key: '%s' \n" % (
+                    args, key, self._last_key))
         res = key
 
         handler = handlers.get(key)
@@ -332,7 +360,7 @@ class DoubleTap(object):
             return key
 
         try:
-            res = handler.trigger(self._last_key)
+            res = handler.event_proc(self._last_key)
         except Exception:
             import traceback
             self._dfile.write("EXECPTION\n%s\n" % (traceback.format_exc(),))
