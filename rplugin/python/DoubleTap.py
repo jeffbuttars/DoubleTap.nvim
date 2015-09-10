@@ -23,6 +23,7 @@ insert_map = {
         "(": {"l": "(", "r": ")"},
         '"': {"l": '"', "r": '"'},
         "'": {'l': "'", 'r': "'"},
+        "`": {'l': "`", 'r': "`"},
         "{": {'l': "{", 'r': "}",
               'mode': 'triggered', 'filler': ['', '']
               },
@@ -35,8 +36,8 @@ jump_map = {
         "}": {'l': "{", 'r': "}"},
         "]": {'l': "[", 'r': "]"},
         ">": {'l': "<", 'r': ">"},
-        #  '"': {"l": '"', "r": '"', 'sym': True},  # Symetric : True
-        #  "'": {'l': "'", 'r': "'", 'sym': True},
+        #  '"': {"l": '"', "r": '"'},
+        #  "'": {'l': "'", 'r': "'"},
         }
 
 
@@ -56,7 +57,7 @@ INPUT_MODE = INPUT_MODES[1]
 
 class KeyInputHandler(object):
 
-    def __init__(self, vim, key, key_conf, key_timeout=None, ofd=None, logger=None):
+    def __init__(self, vim, key, key_conf, key_timeout=None, logger=None):
         self._logger = logger or mod_logger
         self._key = key
         self._key_conf = key_conf
@@ -132,6 +133,8 @@ class KeyInputHandler(object):
         This will often contain whether we are in a single or double quote
         string. How that is represented seems syntax specific, not standard.
         We still leverage that knowledge if we can.
+
+        returns the string character of the string we're in or None
         """
 
         synstr = self._vim.eval('synIDattr(synID(line("."), col("."), 0), "name" )')
@@ -140,7 +143,20 @@ class KeyInputHandler(object):
         in_string = 'string' in synstr.lower()
         self._log("In string %s", in_string)
 
-        return in_string
+        if in_string:
+            q = []
+            ss = self._vim.eval('searchpos("\'", "Wn")')
+            if ss:
+                q.append(ss + ["\'"])
+
+            ds = self._vim.eval("searchpos('\"',  'Wn')")
+            if ds:
+                q.append(ds + ['\"'])
+
+            self._log("In string, ss: %s, ds: %s, %s", ss, ds, min(*q))
+            return min(*q)
+
+        return None
 
     def stream(self, last_key):
 
@@ -192,8 +208,8 @@ class KeyInputHandler(object):
 
 
 class InsertHandler(KeyInputHandler):
-    def __init__(self, vim, key, key_conf, key_timeout=None, ofd=None):
-        super(InsertHandler, self).__init__(vim, key, key_conf, key_timeout=key_timeout, ofd=ofd)
+    def __init__(self, vim, key, key_conf, key_timeout=None, jumper=False):
+        super(InsertHandler, self).__init__(vim, key, key_conf, key_timeout=key_timeout)
 
         # XXX(jeffbuttars) Big fat hack for now for the '"' case.
         if key == '"':
@@ -226,9 +242,9 @@ class InsertHandler(KeyInputHandler):
 
 
 class FinishLineHandler(KeyInputHandler):
-    def __init__(self, vim, key, key_conf, key_timeout=None, ofd=None):
+    def __init__(self, vim, key, key_conf, key_timeout=None):
         super(FinishLineHandler, self).__init__(
-                vim, key, key_conf, key_timeout=key_timeout, ofd=ofd)
+                vim, key, key_conf, key_timeout=key_timeout)
 
         imap = "imap <silent> %s <C-R>=DoubleTapFinishLine('%s')<CR>" % (key, key)
         self._log(imap)
@@ -276,13 +292,13 @@ class FinishLineHandler(KeyInputHandler):
 
 
 class TapOutHandler(KeyInputHandler):
-    def __init__(self, vim, key, key_conf, key_timeout=None, ofd=None):
+    def __init__(self, vim, key, key_conf, key_timeout=None, inserter=False):
         super(TapOutHandler, self).__init__(
-                vim, key, key_conf, key_timeout=key_timeout, ofd=ofd)
+                vim, key, key_conf, key_timeout=key_timeout)
 
         self._lkey = key_conf.get('l')
         self._rkey = key_conf.get('r')
-        self._is_sym = key_conf.get('sym', False)
+        #  self._is_sym = key_conf.get('sym', False)
 
         if key == '"':
             imap = "imap <silent> %s <C-R>=DoubleTapOut('%s')<CR>" % (
@@ -326,7 +342,14 @@ class TapOutHandler(KeyInputHandler):
 
         # Vim has some built funcs to help us with this. If we're in a matching
         # pair, witch is likely, it will do the jump for us!
-        sres = int(self._vim.eval("searchpair('%s', '', '%s', 'W')" % (self._lkey, self._rkey)))
+        lk = self._lkey
+        rk = self._rkey
+
+        if lk == "'":
+            lk = '\''
+            rk = '\''
+
+        sres = int(self._vim.eval("searchpair('%s', '', '%s', 'W')" % (lk, rk)))
         if sres > 0:
             self._log("TapOut patched Vim jump! %s", sres)
             # We jumped.
@@ -382,7 +405,7 @@ class DoubleTap(object):
         for k, v in insert_map.items():
             self._insert_key_handlers[k] = InsertHandler(
                     self._vim, k, v,
-                    key_timeout=self._insert_timer)
+                    key_timeout=self._insert_timer, jumper=(k in jump_map))
             self._log("autocmd_handler initializing %s : %s ", k, v)
 
         for f in finishers_map:
@@ -393,7 +416,7 @@ class DoubleTap(object):
         for k, v in jump_map.items():
             self._jump_key_handlers[k] = TapOutHandler(
                     self._vim, k, v,
-                    key_timeout=self._insert_timer)
+                    key_timeout=self._insert_timer, inserter=(k in insert_map))
 
     def dispatch(self, args, handlers):
         """
