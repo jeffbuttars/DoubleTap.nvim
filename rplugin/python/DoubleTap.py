@@ -1,6 +1,24 @@
 import neovim
 import time
 
+import logging
+
+# Set up the logger
+mod_logger = logging.getLogger(__name__)
+# Use a console handler, set it to debug by default
+logger_ch = logging.StreamHandler()
+mod_logger.setLevel(logging.DEBUG)
+#  log_formatter = logging.Formatter(('%(levelname)s: %(asctime)s %(processName)s:%(process)d'
+#                                     ' %(filename)s:%(lineno)s %(module)s::%(funcName)s()'
+#                                     ' -- %(message)s'))
+#  logger_ch.setFormatter(log_formatter)
+mod_logger.addHandler(logger_ch)
+
+LOGGER_DEBUG_FILE = '/tmp/doubletap_debug.log'
+logger_fd = logging.FileHandler(LOGGER_DEBUG_FILE)
+mod_logger.addHandler(logger_fd)
+
+
 insert_map = {
         "(": {"l": "(", "r": ")"},
         '"': {"l": '"', "r": '"'},
@@ -38,7 +56,8 @@ INPUT_MODE = INPUT_MODES[1]
 
 class KeyInputHandler(object):
 
-    def __init__(self, vim, key, key_conf, key_timeout=None, ofd=None):
+    def __init__(self, vim, key, key_conf, key_timeout=None, ofd=None, logger=None):
+        self._logger = logger or mod_logger
         self._key = key
         self._key_conf = key_conf
         self._vim = vim
@@ -47,28 +66,31 @@ class KeyInputHandler(object):
         self._key_timeout = key_timeout or DEFAULT_KEY_TIMEOUT
         self._matching = False
 
-        self._dfile = ofd
-        self._dfile.write("KeyInputHandler init: %s %s, timer: %s\n" % (
-            key, key_conf, self._key_timeout))
+        self._log("KeyInputHandler init: %s %s, timer: %s",
+                  key, key_conf, self._key_timeout)
 
         self.event_proc = self.stream
 
     def __str__(self):
         return "KeyInputHandler key: %s, key_conf: %s" % (self._key, self._key_conf)
 
+    def _log(self, *args, **kwargs):
+        self._logger.debug(*args, **kwargs)
+
     def _patch_line(self, line, pos, mode=None):
         """Returns a new line without the unwanted input character
         as the result of a double tap.
         """
-        self._dfile.write("TapOut original line: '%s', pos: %s\n" % (line, pos))
 
-        self._dfile.write("KeyInputHandler patch o-line: '%s', pos: %s, mode: %s\n" % (
-            line, pos, mode))
+        self._log("TapOut original line: '%s', pos: %s", line, pos)
+
+        self._log("KeyInputHandler patch o-line: '%s', pos: %s, mode: %s",
+                  line, pos, mode)
 
         if mode:
             m = self._vim.eval('mode()').lower()
             if mode != m:
-                self._dfile.write("KeyInputHandler mode mismatch %s:%s\n" % (mode, m))
+                self._log("KeyInputHandler mode mismatch %s:%s", mode, m)
                 return line
 
             if mode == 'i':
@@ -78,18 +100,61 @@ class KeyInputHandler(object):
         if len(line) >= col:
             line = line[:(col - 1)] + line[col:]
 
-        self._dfile.write("KeyInputHandler patched line: '%s'\n" % (line,))
+        self._log("KeyInputHandler patched line: '%s'", line)
         return line
+
+    #  def _set_lines(self, line, pos, lc, m=None, rc=''):
+    #      """todo: Docstring for _set_lines
+
+    #      :param line: arg description
+    #      :type line: type description
+    #      :param pos: arg description
+    #      :type pos: type description
+    #      :param lc: arg description
+    #      :type lc: type description
+    #      :param m: arg description
+    #      :type m: type description
+    #      :param rc: arg description
+    #      :type rc: type description
+    #      :return:
+    #      :rtype:
+    #      """
+
+    #      if m:
+
+    #      input_list = []
+
+    def _in_str(self, char, pos=None):
+        """
+        Param: thechar the quote character that's been double tapped.
+        See if the cursor is inside a string according the current syntax definition
+
+        This will often contain whether we are in a single or double quote
+        string. How that is represented seems syntax specific, not standard.
+        We still leverage that knowledge if we can.
+        """
+
+        synstr = self._vim.eval('synIDattr(synID(line("."), col("."), 0), "name" )')
+        self._log("synstr %s", synstr)
+
+        in_string = 'string' in synstr.lower()
+        self._log("In string %s", in_string)
+
+        return in_string
 
     def stream(self, last_key):
 
         key = self._key
+
+        if self._in_str(key):
+            return key
+
         # time since epoch in milliseconds
         now = int(time.time() * 1000)
 
         if self._matching:
             # We're being fed keys while processing a doubleTap event, so ignore them
-            self._dfile.write("stream already matching key: %s\n" % key)
+            self._log("stream already matching key: %s", key)
             return key
 
         # for the time being, we only handle simple pairs of keys, so pass
@@ -105,20 +170,20 @@ class KeyInputHandler(object):
                 self._matching = False
                 self._last_key_time = 0
 
-            self._dfile.write("stream perform result: '%s'\n" % res)
+            self._log("stream perform result: '%s'", res)
 
             self._matching = False
             self._last_key_time = 0
             return res
 
-        self._dfile.write("stream BOTTOM key: %s\n" % key)
+        self._log("stream BOTTOM key: %s", key)
         self._last_key_time = now
         return key
 
     def stream_perform(self):
         """
         This is where the 'critical section' work is performed.
-        Do the workin in `stream_perform()` that will change the buffer when a 
+        Do the workin in `stream_perform()` that will change the buffer when a
         doubleTap event has occurred.
         Whatever `stream_perform` returns will be written in the current
         buffer and the current position
@@ -136,7 +201,7 @@ class InsertHandler(KeyInputHandler):
         else:
             imap = "imap <silent> %s <C-R>=DoubleTapInsert(\"%s\")<CR>" % (key, key)
 
-        self._dfile.write(imap + "\n")
+        self._log(imap)
         self._vim.command(imap)
 
     def __str__(self):
@@ -144,8 +209,8 @@ class InsertHandler(KeyInputHandler):
 
     def stream_perform(self):
         pos = self._vim.current.window.cursor
-        self._dfile.write("double_tap_insert key: %s\n" % self._key)
-        self._dfile.write("double_tap_insert : window pos %s\n" % pos)
+        self._log("double_tap_insert key: %s", self._key)
+        self._log("double_tap_insert : window pos %s", pos)
 
         buf = self._vim.current.buffer
         ln = pos[0] - 1
@@ -153,7 +218,7 @@ class InsertHandler(KeyInputHandler):
         lp = pos[1]
         bl = line[:lp - 1]
         el = line[lp:]
-        self._dfile.write("double_tap_insert : line %s\n" % ln)
+        self._log("double_tap_insert : line %s", ln)
         buf[ln] = bl + self._key_conf['r'] + el
         self._vim.current.window.cursor = (pos[0], lp - 1)
 
@@ -166,11 +231,11 @@ class FinishLineHandler(KeyInputHandler):
                 vim, key, key_conf, key_timeout=key_timeout, ofd=ofd)
 
         imap = "imap <silent> %s <C-R>=DoubleTapFinishLine('%s')<CR>" % (key, key)
-        self._dfile.write(imap + "\n")
+        self._log(imap)
         self._vim.command(imap)
 
         imap = "nmap <silent> %s <ESC>:call DoubleTapFinishLineNormal('%s')<CR>" % (key, key)
-        self._dfile.write(imap + "\n")
+        self._log(imap)
         self._vim.command(imap)
 
     def __str__(self):
@@ -179,17 +244,16 @@ class FinishLineHandler(KeyInputHandler):
     def stream_perform(self):
         pos = self._vim.current.window.cursor
 
-        self._dfile.write("double_finish_line key: %s\n" % self._key)
-        self._dfile.write("double_finish_line : window pos %s\n" % pos)
-        #  self._dfile.write("double_finish_line : mode %s\n" % mode)
+        self._log("double_finish_line key: %s", self._key)
+        self._log("double_finish_line : window pos %s", pos)
 
         buf = self._vim.current.buffer
         ln = pos[0] - 1
         c = pos[1]
 
-        self._dfile.write("double_finish_line : cur line '%s' %s\n" % (buf[ln], len(buf[ln])))
+        self._log("double_finish_line : cur line '%s' %s", buf[ln], len(buf[ln]))
         if buf[ln]:
-            self._dfile.write("double_finish_line : cur char '%s'\n" % (buf[ln][c - 1],))
+            self._log("double_finish_line : cur char '%s'", buf[ln][c - 1])
 
         line = buf[ln].rstrip()
 
@@ -202,8 +266,8 @@ class FinishLineHandler(KeyInputHandler):
 
         buf[ln] = line
 
-        self._dfile.write("double_finish_line : new line '%s' %s\n" % (line, len(line)))
-        self._dfile.write("double_finish_line : column %s\n" % c)
+        self._log("double_finish_line : new line '%s' %s", line, len(line))
+        self._log("double_finish_line : column %s", c)
 
         #  if mode == 'i':
         #      self._vim.current.window.cursor = (pos[0], max(0, pos[1] - 1))
@@ -227,7 +291,7 @@ class TapOutHandler(KeyInputHandler):
             imap = "imap <silent> %s <C-R>=DoubleTapOut(\"%s\")<CR>" % (
                     self._key, self._key)
 
-        self._dfile.write(imap + "\n")
+        self._log(imap)
         self._vim.command(imap)
 
     def __str__(self):
@@ -245,7 +309,7 @@ class TapOutHandler(KeyInputHandler):
         # We have be carefull about the first and last chars
         c = max(0, min(pos[1] - 1, len(line) - 1))
 
-        self._dfile.write("checking line: '%s', c: %s, len: %s \n" % (line, c, len(line)))
+        self._log("checking line: '%s', c: %s, len: %s ", line, c, len(line))
 
         if line[c] == self._lkey:
             self._vim.current.window.cursor = (pos[0], (pos[1] + 1))
@@ -253,7 +317,7 @@ class TapOutHandler(KeyInputHandler):
 
         buf[ln] = line
         c = max(0, min(pos[1] - 1, len(line) - 1))
-        self._dfile.write("checking line: '%s', c: %s, len: %s \n" % (line, c, len(line)))
+        self._log("checking line: '%s', c: %s, len: %s ", line, c, len(line))
 
         # If we're sitting on the char, just move over one!
         if line[c] == self._rkey:
@@ -264,14 +328,14 @@ class TapOutHandler(KeyInputHandler):
         # pair, witch is likely, it will do the jump for us!
         sres = int(self._vim.eval("searchpair('%s', '', '%s', 'W')" % (self._lkey, self._rkey)))
         if sres > 0:
-            self._dfile.write("TapOut patched Vim jump! %s\n" % sres)
+            self._log("TapOut patched Vim jump! %s", sres)
             # We jumped.
             #  call s:advCursorAndMatch( 1, [ [ l:cpos[1], l:cpos[2]-1 ] ] )
             pos = self._vim.current.window.cursor
             self._vim.current.window.cursor = (pos[0], (pos[1] + 1))
             return ""
 
-        return self._key 
+        return self._key
 
 
 @neovim.plugin
@@ -279,14 +343,12 @@ class DoubleTap(object):
     """Docstring for DoubleTap """
 
     def __init__(self, vim):
-        print("__init__")
+        self._logger = mod_logger
+
+        self._log("DoubleTap::__init__")
+
         self._vim = vim
         self._last_key = ''
-
-        #  self._buf = self._vim.current.buffer
-        self._dfile = open('/tmp/dtout.text', "a")
-        #  self._dfile.write("%s\n" % (dir(vim),))
-        self._dfile.write("Instatiating...\n")
 
         self._insert_key_handlers = {}
         self._finish_key_handlers = {}
@@ -296,7 +358,10 @@ class DoubleTap(object):
         #  self._insert_timer = int(self.lookup_var("g:DoubleTapInsertTimer", DEFAULT_KEY_TIMEOUT))
 
         self._insert_timer = self._insert_timer or DEFAULT_KEY_TIMEOUT
-        self._dfile.write("Instatiating... timer %s\n" % self._insert_timer)
+        self._log("Instatiating... timer %s", self._insert_timer)
+
+    def _log(self, *args, **kwargs):
+        self._logger.debug(*args, **kwargs)
 
     def lookup_var(self, vname, *args):
         defa = None
@@ -317,18 +382,18 @@ class DoubleTap(object):
         for k, v in insert_map.items():
             self._insert_key_handlers[k] = InsertHandler(
                     self._vim, k, v,
-                    key_timeout=self._insert_timer, ofd=self._dfile)
-            self._dfile.write("autocmd_handler initializing %s : %s \n" % (k, v))
+                    key_timeout=self._insert_timer)
+            self._log("autocmd_handler initializing %s : %s ", k, v)
 
         for f in finishers_map:
             self._finish_key_handlers[f] = FinishLineHandler(
                     self._vim, f, {},
-                    key_timeout=self._insert_timer, ofd=self._dfile)
+                    key_timeout=self._insert_timer)
 
         for k, v in jump_map.items():
             self._jump_key_handlers[k] = TapOutHandler(
                     self._vim, k, v,
-                    key_timeout=self._insert_timer, ofd=self._dfile)
+                    key_timeout=self._insert_timer)
 
     def dispatch(self, args, handlers):
         """
@@ -340,7 +405,7 @@ class DoubleTap(object):
         In stream mode the keys are inserted as they're typed. If a double tap event
         occurs, then the line is retroactively edited to reflect the pair input.
 
-        In triggerd mode, when the first trigger input is received, it's buffered until it's 
+        In triggerd mode, when the first trigger input is received, it's buffered until it's
         determined that a double tap event won't happen, or of course the double tap event
         occurs. When the state is resolved, the insert will happen.
         """
@@ -350,13 +415,12 @@ class DoubleTap(object):
             # Ignore and carry on. This would be a very strange scenario
             return
 
-        self._dfile.write(
-                "dispatch args: %s, key: '%s' last_key: '%s' \n" % (
-                    args, key, self._last_key))
+        self._log("dispatch args: %s, key: '%s' last_key: '%s' ",
+                  args, key, self._last_key)
         res = key
 
         handler = handlers.get(key)
-        self._dfile.write("dispatch key: %s handler: %s \n" % (key, handler))
+        self._log("dispatch key: %s handler: %s ", key, handler)
 
         if not handler:
             return key
@@ -365,10 +429,10 @@ class DoubleTap(object):
             res = handler.event_proc(self._last_key)
         except Exception:
             import traceback
-            self._dfile.write("EXECPTION\n%s\n" % (traceback.format_exc(),))
+            self._log("EXECPTION\n%s", traceback.format_exc())
             return key
 
-        self._dfile.write("dispatch key: %s result: '%s' \n" % (key, res))
+        self._log("dispatch key: %s result: '%s' ", key, res)
 
         self._last_key = key
         return res
