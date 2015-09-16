@@ -78,6 +78,10 @@ class KeyInputHandler(object):
     def _log(self, *args, **kwargs):
         self._logger.debug(*args, **kwargs)
 
+    @property
+    def mode(self):
+        return self._vim.eval('mode()').lower()
+
     def _patch_line(self, line, pos, mode=None):
         """Returns a new line without the unwanted input character
         as the result of a double tap.
@@ -89,7 +93,7 @@ class KeyInputHandler(object):
                   line, pos, mode)
 
         if mode:
-            m = self._vim.eval('mode()').lower()
+            m = self.mode
             if mode != m:
                 self._log("KeyInputHandler mode mismatch %s:%s", mode, m)
                 return line
@@ -134,8 +138,13 @@ class KeyInputHandler(object):
         string. How that is represented seems syntax specific, not standard.
         We still leverage that knowledge if we can.
 
+        If the mode is not 'i', then None is always returned
+
         returns the string character of the string we're in or None
         """
+
+        if self.mode != 'i':
+            return None
 
         synstr = self._vim.eval('synIDattr(synID(line("."), col("."), 0), "name" )')
         self._log("synstr %s", synstr)
@@ -399,8 +408,7 @@ class DoubleTap(object):
 
     @neovim.autocmd('BufEnter', pattern='*', eval='expand("<afile>")', sync=True)
     def autocmd_handler(self, filename):
-        #  self._vim.current.line = "garbage!!! " + filename
-        self._vim.command("echo 'garbage!!! %s'" % filename)
+        #  self._vim.command("echo 'garbage!!! %s'" % filename)
 
         for k, v in insert_map.items():
             self._insert_key_handlers[k] = InsertHandler(
