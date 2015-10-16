@@ -41,7 +41,7 @@ jump_map = {
         }
 
 
-finishers_map = (';', ',', ':')
+finishers_map = (';', ',')
 
 # future configurable, in MS
 # configurable per map will be available
@@ -140,9 +140,9 @@ class KeyInputHandler(object):
         if not in_string:
             return None
 
-        #  in_string can mean the string has been opened but not closed. We only care
-        # if we're in a closed string.
-        # Syntacticly, we're in a string, but we only care about if we're in a closed string.
+        # Determine if we're in a single or double quoted string because we'll nesting
+        # one into the other.
+
         q = []
         ss = self._vim.eval('searchpos("\'", "Wn")')
         if ss:
@@ -170,27 +170,31 @@ class KeyInputHandler(object):
         # for the time being, we only handle simple pairs of keys, so pass
         # on anything that doesn't match the last key.
         if key == last_key and now - self._last_key_time < self._key_timeout:
-            self._matching = True
 
             if self._in_str(key):
                 return key
 
+            self._matching = True
+
             # This is our 'critical section'
             try:
                 res = self.stream_perform()
+            except Exception as e:
+                self._log("Exception!!!!: '%s' %s", res, e)
             finally:
                 # reset our state, let the exception be handled further up
+                self._log("Exception finally, reset matching state")
                 self._matching = False
                 self._last_key_time = 0
 
-            self._log("stream perform result: '%s'", res)
-
             self._matching = False
             self._last_key_time = 0
+            self._log("stream perform result: '%s'", res)
             return res
 
         self._log("stream BOTTOM key: %s", key)
         self._last_key_time = now
+
         return key
 
     def stream_perform(self):
