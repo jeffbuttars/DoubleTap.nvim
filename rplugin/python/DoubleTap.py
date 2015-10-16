@@ -140,20 +140,62 @@ class KeyInputHandler(object):
         if not in_string:
             return None
 
-        # Determine if we're in a single or double quoted string because we'll nesting
-        # one into the other.
+        self._log("POS %s %s" % (self._vim.eval("line('.')"), self._vim.eval("col('.')")))
 
+        # We're in a string syntacticly, if the current input char is not a string char,
+        # return affirmative
+        if char not in ('"', "'"):
+            return char
+
+        # Now we just have to handle the nested string condition
+        # TODO(jeff) make this configurable.
+
+        pos = self._vim.current.window.cursor
+        buf = self._vim.current.buffer
+        line = buf[pos[0] - 1]
+        pos_char = line[pos[1]]
+
+        # check for a boundry condition here. If the character we're on is a string but
+        # it's not the same kind that was just tapped, return None
+        # If they are the same, return the char
+        self._log("Boundary pos: %s, dchar: %s", pos_char, char)
+        if pos_char in ('"', "'"):
+            if pos_char != char:
+                return None
+            return char
+
+        # Now we figure out if we're in a different kind of string then what is the current
+        # inputed string type
         q = []
-        ss = self._vim.eval('searchpos("\'", "Wn")')
-        if ss:
+        self._log('searchpos("%s", "Wn")' % "'")
+        ss = self._vim.eval('searchpos("%s", "Wn")' % "'")
+        self._log("next ss %s", ss)
+
+        if ss and any(ss):
             q.append(ss + ["\'"])
 
+        self._log("searchpos('\"',  'Wn')")
         ds = self._vim.eval("searchpos('\"',  'Wn')")
-        if ds:
+        self._log("next ds %s", ds)
+
+        if ds and any(ds):
             q.append(ds + ['\"'])
 
-        self._log("In string, ss: %s, ds: %s, %s", ss, ds, min(*q))
-        return min(*q)
+        if not q:
+            return char
+
+        ins = min(q)
+        self._log("In string, q: %s, ss: %s, ds: %s, %s", q, ss, ds, ins)
+        self._log("In string, ins : %s", ins)
+
+        # If we're in a string that is not the same kind as the one we're inputing,
+        # allow double tapping it.
+        line = buf[ins[0] - 1]
+        res = line[ins[1] - 1]
+        self._log("In String returning result: %s:%s, char:%s , res:%s",
+                  self._vim.eval("line('.')"), self._vim.eval("col('.')"), char, res)
+
+        return char == res
 
     def stream(self, last_key):
 
