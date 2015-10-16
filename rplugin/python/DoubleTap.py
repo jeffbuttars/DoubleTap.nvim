@@ -41,7 +41,7 @@ jump_map = {
         }
 
 
-finishers_map = (';', ',')
+finishers_map = (';', ',', ':')
 
 # future configurable, in MS
 # configurable per map will be available
@@ -56,6 +56,12 @@ INPUT_MODE = INPUT_MODES[1]
 
 
 class KeyInputHandler(object):
+
+    STRING_PATTERNS = {
+        'generic': ('string', 'quote'),
+        'single': ('StringS', 'shQuote'),
+        'double': ('shDoubleQuote',)
+    }
 
     def __init__(self, vim, key, key_conf, key_timeout=None, logger=None):
         self._logger = logger or mod_logger
@@ -108,27 +114,6 @@ class KeyInputHandler(object):
         self._log("KeyInputHandler patched line: '%s'", line)
         return line
 
-    #  def _set_lines(self, line, pos, lc, m=None, rc=''):
-    #      """todo: Docstring for _set_lines
-
-    #      :param line: arg description
-    #      :type line: type description
-    #      :param pos: arg description
-    #      :type pos: type description
-    #      :param lc: arg description
-    #      :type lc: type description
-    #      :param m: arg description
-    #      :type m: type description
-    #      :param rc: arg description
-    #      :type rc: type description
-    #      :return:
-    #      :rtype:
-    #      """
-
-    #      if m:
-
-    #      input_list = []
-
     def _in_str(self, char, pos=None):
         """
         Param: thechar the quote character that's been double tapped.
@@ -149,43 +134,46 @@ class KeyInputHandler(object):
         synstr = self._vim.eval('synIDattr(synID(line("."), col("."), 0), "name" )')
         self._log("synstr %s", synstr)
 
-        in_string = 'string' in synstr.lower()
+        in_string = any([x in synstr.lower() for x in self.STRING_PATTERNS['generic']])
         self._log("In string %s", in_string)
 
-        if in_string:
-            q = []
-            ss = self._vim.eval('searchpos("\'", "Wn")')
-            if ss:
-                q.append(ss + ["\'"])
+        if not in_string:
+            return None
 
-            ds = self._vim.eval("searchpos('\"',  'Wn')")
-            if ds:
-                q.append(ds + ['\"'])
+        #  in_string can mean the string has been opened but not closed. We only care
+        # if we're in a closed string.
+        # Syntacticly, we're in a string, but we only care about if we're in a closed string.
+        q = []
+        ss = self._vim.eval('searchpos("\'", "Wn")')
+        if ss:
+            q.append(ss + ["\'"])
 
-            self._log("In string, ss: %s, ds: %s, %s", ss, ds, min(*q))
-            return min(*q)
+        ds = self._vim.eval("searchpos('\"',  'Wn')")
+        if ds:
+            q.append(ds + ['\"'])
 
-        return None
+        self._log("In string, ss: %s, ds: %s, %s", ss, ds, min(*q))
+        return min(*q)
 
     def stream(self, last_key):
 
         key = self._key
-
-        if self._in_str(key):
-            return key
-
-        # time since epoch in milliseconds
-        now = int(time.time() * 1000)
 
         if self._matching:
             # We're being fed keys while processing a doubleTap event, so ignore them
             self._log("stream already matching key: %s", key)
             return key
 
+        # time since epoch in milliseconds
+        now = int(time.time() * 1000)
+
         # for the time being, we only handle simple pairs of keys, so pass
         # on anything that doesn't match the last key.
         if key == last_key and now - self._last_key_time < self._key_timeout:
             self._matching = True
+
+            if self._in_str(key):
+                return key
 
             # This is our 'critical section'
             try:
@@ -454,13 +442,16 @@ class DoubleTap(object):
         self._log("dispatch key: %s handler: %s ", key, handler)
 
         if not handler:
+            self._last_key = key
             return key
 
+        # Need mister pokemon here to go away
         try:
             res = handler.event_proc(self._last_key)
         except Exception:
             import traceback
             self._log("EXECPTION\n%s", traceback.format_exc())
+            self._last_key = key
             return key
 
         self._log("dispatch key: %s result: '%s' ", key, res)
