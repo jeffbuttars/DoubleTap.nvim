@@ -36,8 +36,8 @@ jump_map = {
         "}": {'l': "{", 'r': "}"},
         "]": {'l': "[", 'r': "]"},
         ">": {'l': "<", 'r': ">"},
-        #  '"': {"l": '"', "r": '"'},
-        #  "'": {'l': "'", 'r': "'"},
+        '"': {"l": '"', "r": '"'},
+        "'": {'l': "'", 'r': "'"},
         }
 
 
@@ -140,11 +140,13 @@ class KeyInputHandler(object):
         if not in_string:
             return None
 
-        self._log("POS %s %s" % (self._vim.eval("line('.')"), self._vim.eval("col('.')")))
+        self._log("char: '%s' POS %s %s" % (
+            char, self._vim.eval("line('.')"), self._vim.eval("col('.')")))
 
         # We're in a string syntacticly, if the current input char is not a string char,
         # return affirmative
         if char not in ('"', "'"):
+            self._log("char, '%s', not a string char, returning the char", char)
             return char
 
         # Now we just have to handle the nested string condition
@@ -153,15 +155,16 @@ class KeyInputHandler(object):
         pos = self._vim.current.window.cursor
         buf = self._vim.current.buffer
         line = buf[pos[0] - 1]
-        pos_char = line[pos[1]]
+        pos_char = line[pos[1] - 1]
 
         # check for a boundry condition here. If the character we're on is a string but
         # it's not the same kind that was just tapped, return None
         # If they are the same, return the char
-        self._log("Boundary pos: %s, dchar: %s", pos_char, char)
+        self._log("Boundary pos: '%s', char: '%s'", pos_char, char)
         if pos_char in ('"', "'"):
-            if pos_char != char:
+            if pos_char == char:
                 return None
+            # This 'should' be handled as a jump out if jump out is enabled.
             return char
 
         # Now we figure out if we're in a different kind of string then what is the current
@@ -182,6 +185,7 @@ class KeyInputHandler(object):
             q.append(ds + ['\"'])
 
         if not q:
+            # Couldn't determine, just go with being in the string for now
             return char
 
         ins = min(q)
@@ -195,7 +199,7 @@ class KeyInputHandler(object):
         self._log("In String returning result: %s:%s, char:%s , res:%s",
                   self._vim.eval("line('.')"), self._vim.eval("col('.')"), char, res)
 
-        return char == res
+        return ((char == res) and char) or None
 
     def stream(self, last_key):
 
@@ -234,7 +238,7 @@ class KeyInputHandler(object):
             self._log("stream perform result: '%s'", res)
             return res
 
-        self._log("stream BOTTOM key: %s", key)
+        self._log("stream BOTTOM key: '%s'", key)
         self._last_key_time = now
 
         return key
@@ -253,6 +257,8 @@ class KeyInputHandler(object):
 class InsertHandler(KeyInputHandler):
     def __init__(self, vim, key, key_conf, key_timeout=None, jumper=False):
         super(InsertHandler, self).__init__(vim, key, key_conf, key_timeout=key_timeout)
+
+        self._jumper = jumper
 
         # XXX(jeffbuttars) Big fat hack for now for the '"' case.
         if key == '"':
@@ -339,19 +345,24 @@ class TapOutHandler(KeyInputHandler):
         super(TapOutHandler, self).__init__(
                 vim, key, key_conf, key_timeout=key_timeout)
 
+        self._inserter = inserter
         self._lkey = key_conf.get('l')
         self._rkey = key_conf.get('r')
         #  self._is_sym = key_conf.get('sym', False)
 
-        if key == '"':
-            imap = "imap <silent> %s <C-R>=DoubleTapOut('%s')<CR>" % (
-                    self._key, self._key)
-        else:
-            imap = "imap <silent> %s <C-R>=DoubleTapOut(\"%s\")<CR>" % (
-                    self._key, self._key)
+        # Don't maper inserters, it's up to the inerstion code to figure
+        # out if it's an insert or tapout.
 
-        self._log(imap)
-        self._vim.command(imap)
+        if not self._inserter:
+            if key == '"':
+                imap = "imap <silent> %s <C-R>=DoubleTapOut('%s')<CR>" % (
+                        self._key, self._key)
+            else:
+                imap = "imap <silent> %s <C-R>=DoubleTapOut(\"%s\")<CR>" % (
+                        self._key, self._key)
+
+            self._log(imap)
+            self._vim.command(imap)
 
     def __str__(self):
         return "TapOutHandler key: %s, key_conf: %s" % (self._key, self._key_conf)
@@ -492,13 +503,12 @@ class DoubleTap(object):
             return key
 
         # Need mister pokemon here to go away
+        res = key
         try:
             res = handler.event_proc(self._last_key)
         except Exception:
             import traceback
             self._log("EXECPTION\n%s", traceback.format_exc())
-            self._last_key = key
-            return key
 
         self._log("dispatch key: %s result: '%s' ", key, res)
 
