@@ -213,22 +213,23 @@ class KeyInputHandler(object):
         # time since epoch in milliseconds
         now = int(time.time() * 1000)
 
-        # only take action if the existing characters match the key map.
-        # this is important as this plugin only registers a few characters in the
-        # autocommand map. So it's possible that additional keys lie between what
-        # we think are consecutive chars.
-        pos = self._vim.current.window.cursor
-        buf = self._vim.current.buffer
-        ln = pos[0] - 1
-        line = buf[ln]
-        lp = pos[1] - 1
+        if self.mode == 'i':
+            # only take action if the existing characters match the key map.
+            # this is important as this plugin only registers a few characters in the
+            # autocommand map. So it's possible that additional keys lie between what
+            # we think are consecutive chars.
+            pos = self._vim.current.window.cursor
+            buf = self._vim.current.buffer
+            ln = pos[0] - 1
+            line = buf[ln]
+            lp = pos[1] - 1
 
-        # The key we just got, plus the key on the page, must be the same before
-        # we continute.
-        # This prevents a fast typer from triggering on something like {a}
-        if self._key != line[lp]:
-            self._last_key_time = now
-            return key
+            # The key we just got, plus the key on the page, must be the same before
+            # we continute.
+            # This prevents a fast typer from triggering on something like {a}
+            if self._key != line[lp]:
+                self._last_key_time = now
+                return key
 
         # for the time being, we only handle simple pairs of keys, so pass
         # on anything that doesn't match the last key.
