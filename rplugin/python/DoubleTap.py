@@ -223,11 +223,13 @@ class KeyInputHandler(object):
             ln = pos[0] - 1
             line = buf[ln]
             lp = pos[1] - 1
+            #  if lp < 0:
+            #      lp = 0
 
             # The key we just got, plus the key on the page, must be the same before
             # we continute.
             # This prevents a fast typer from triggering on something like {a}
-            if self._key != line[lp]:
+            if line and self._key != line[lp]:
                 self._last_key_time = now
                 return key
 
