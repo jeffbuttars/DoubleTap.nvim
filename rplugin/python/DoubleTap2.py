@@ -7,6 +7,8 @@ TODO:
     * Add auto close without the need for a double tap. This is how most pair plugins work.
         * Make this optional at the per character level. Some auto, some don't
     * Add jump out support back.
+    * Support 'disable' flag
+    * Bring in surround taps
 """
 
 # Set up the logger
@@ -19,6 +21,11 @@ mod_logger.addHandler(logger_ch)
 LOGGER_DEBUG_FILE = '/tmp/doubletap_debug.log'
 logger_fd = logging.FileHandler(LOGGER_DEBUG_FILE)
 mod_logger.addHandler(logger_fd)
+
+SYN_STRING = [
+    'string', 'heredoc', 'doctestvalue',
+    'doctest', 'doctest2', 'bytesescape',
+]
 
 # future configurable, in MS
 # configurable per map will be available
@@ -33,6 +40,7 @@ INSERT_MAP = {
     "{": {'insert': '{}', 'r': '}'},
     "<": {'insert': '<>', 'r': '>'},
     "'": {'insert': "''"},
+    '"': {'insert': '""'},
     "`": {'insert': "``"},
 }
 
@@ -42,6 +50,19 @@ Default finishers map for all file types
 FINISHERS_MAP = {
     ';': ';',
     ',': ',',
+}
+
+"""
+Default jump map values
+"""
+JUMP_MAP = {
+    ")": ')',
+    "]": ']',
+    "}": '}',
+    ">": '>',
+    "'": 'string',
+    '"': 'string',
+    "`": 'string',
 }
 
 
@@ -67,48 +88,34 @@ def dt_nmap(func, key):
     return nmap
 
 
-@neovim.plugin
-class DoubleTap(object):
-
+class DTConfig(object):
     def __init__(self, vim):
         self._logger = mod_logger
-
-        self._log("DoubleTap::__init__")
+        self._log("DTConfig::__init__")
         self._vim = vim
-        self._key_tout = DEFAULT_KEY_TIMEOUT
-        self._key_stack = []
-        self._last_insert = None
-        self._finishers_map = {}
-        self._insert_map = {}
 
-    @property
-    def mode(self):
-        return self._vim.eval('mode()').lower()
+        self.dt_globals = {
+            'finishers': FINISHERS_MAP.copy(),
+            'insert': INSERT_MAP.copy(),
+            'jump': JUMP_MAP.copy(),
+            'timeout': DEFAULT_KEY_TIMEOUT
+        }
+
+        self.dt_ft = {}
+
+    def __getattr__(self, name):
+        self._log("DTConfig::__getattr__ %s", name)
+
+        if name in self.dt_globals:
+            self._log("DTConfig::__getattr__ vim var %s : %s", name, self.dt_globals.get(name))
+            #  self._log("DTConfig::__getattr__ vim var %s : %s", name, self.find_config_var(name))
+            #  return self.find_config_var(name)
+            return self.dt_ft.get(self.filetype(), {}).get(name, self.dt_globals.get(name))
+
+        return self.__getattribute__(name)
 
     def filetype(self):
         return self._vim.eval('&filetype')
-
-    def finishers_map(self):
-        # Get the finishers map. Will be built and cached the first access
-        ft = self.filetype()
-        if self._finishers_map.get(ft):
-            return self._finishers_map[ft]
-
-        self._finishers_map[ft] = FINISHERS_MAP.copy()
-        self._finishers_map[ft].update(self.ft_var('finishers', {}))
-        self._log('finishers_map %s', self._finishers_map[ft])
-        return self._finishers_map[ft]
-
-    def insert_map(self):
-        # Get the insert map. Will be built and cached the first access
-        ft = self.filetype()
-        if self._insert_map.get(ft):
-            return self._insert_map[ft]
-
-        self._insert_map[ft] = INSERT_MAP.copy()
-        self._insert_map[ft].update(self.ft_var('insert', {}))
-        self._log('insert_map %s', self._insert_map[ft])
-        return self._insert_map[ft]
 
     def lookup_var(self, vname, defl=None):
         # Lookup a Vim variable from the current instance. Provides
@@ -119,11 +126,74 @@ class DoubleTap(object):
         return defl
 
     def ft_var(self, vname, defl=None):
+        # Lookup variables at the filetype scope, fallback to global scope if ft scope
+        # value is not found, otherwise return defl or None
         ft = self.filetype()
         return self.dt_var('%s_%s' % (ft, vname), defl=self.dt_var(vname, defl=defl))
 
     def dt_var(self, vname, defl=None):
+        # Lookup variables at the g:doubletap global scope
+        # if value is not found return defl or None
         return self.lookup_var('g:doubletap_%s' % vname, defl=defl)
+
+    def update_ft(self):
+        ft = self.filetype()
+        self._log('update_ft %s', ft)
+
+        if self.dt_ft.get(ft):
+            self._log('update_ft %s cache exists', ft)
+            return
+
+        self._log('update_ft %s building cache ...', ft)
+        for k, v in self.dt_globals.items():
+            self._log('update_ft %s building cache %s : %s', ft, k, v)
+            if type(v) is dict:
+                self.dt_ft[k] = v.copy()
+                cv = self.ft_var(k, self.dt_ft[k])
+                self.dt_ft[k].update(cv)
+            else:
+                self.dt_ft[k] = self.ft_var(k, v)
+
+            self._log('update_ft %s built cache value %s : %s', ft, k, self.dt_ft[k])
+
+    def _log(self, *args, **kwargs):
+        self._logger.debug(*args, **kwargs)
+
+
+@neovim.plugin
+class DoubleTap(object):
+
+    def __init__(self, vim):
+        self._logger = mod_logger
+        self._log("DoubleTap::__init__")
+        self._vim = vim
+        self._key_stack = []
+        self._last_insert = None
+        self._config = DTConfig(vim)
+
+    @property
+    def mode(self):
+        return self._vim.eval('mode()').lower()
+
+
+    def in_string(self, pos=None):
+        try:
+            line = pos and pos[0] or 'line(".")'
+            col = pos and pos[1] or 'col(".")'
+        except IndexError as e:
+            self._log.error(e)
+            line = 'line(".")'
+            col = 'col(".")'
+
+        syn = self._vim.eval(
+            'synIDattr(synID(line("."), col("."), 1), "name")' % (line, col)
+        ).lower()
+
+        for symbol in SYN_STRING:
+            if syn in symbol:
+                return True
+
+        return False
 
     def _log(self, *args, **kwargs):
         self._logger.debug(*args, **kwargs)
@@ -182,7 +252,7 @@ class DoubleTap(object):
             return None
 
         stack_life = self._key_stack[-1]['when'] - self._key_stack[0]['when']
-        if stack_life > self._key_tout:
+        if stack_life > self._config.timeout:
             self._log("_is_double_tap too old")
             self._key_stack = [kdata]
             return None
@@ -201,7 +271,7 @@ class DoubleTap(object):
 
         line = self.mode == 'i' and self._cut_back(1, set_pos=True) or buf[ln]
         line = line.rstrip()
-        fm = self.finishers_map()
+        fm = self._config.finishers
 
         if fm[key] and line[-1] != fm[key]:
             line += fm.get(key, '')
@@ -237,7 +307,7 @@ class DoubleTap(object):
         ks_len = len(self._key_stack)
         self._key_stack = None
         #  insert = INSERT_MAP[key]
-        insert = self.insert_map()[key]
+        insert = self._config.insert[key]
         self._last_insert = insert
 
         # erase previous keys, insert our characters and reposition the cursor.
@@ -268,14 +338,17 @@ class DoubleTap(object):
         self._log("autocmd_handler_bufenter initializing %s ", filename)
         self._log('autocmd_handler_bufenter initialize the insert maps')
 
-        self._key_tout = self.ft_var('timeout', DEFAULT_KEY_TIMEOUT)
+        self._config.update_ft()
 
-        self._log('autocmd_handler_bufenter updated finishers %s', self.finishers_map())
-        self._log('autocmd_handler_bufenter updated inserters %s', self.insert_map())
-        self._log('autocmd_handler_bufenter updated timeout %s', self._key_tout)
+        self._log('autocmd_handler_bufenter updated finishers %s', self._config.finishers)
+        self._log('autocmd_handler_bufenter updated inserters %s', self._config.insert)
+        self._log('autocmd_handler_bufenter updated timeout %s', self._config.timeout)
 
-        im = self.insert_map()
-        for k in im:
+        im = self._config.insert
+        for k, v in im.items():
+            if v.get('disabled'):
+                continue
+
             imap = dt_imap('DoubleTapInsert', k)
             self._log('initialize the insert map "%s"', imap)
             self._vim.command(imap)
@@ -285,7 +358,10 @@ class DoubleTap(object):
                 self._log('initialize the rightsert map "%s"', imap)
                 self._vim.command(imap)
 
-        for k in self.finishers_map():
+        for k, v in self._config.finishers.items():
+            if v == 'disabled':
+                continue
+
             imap = dt_imap('DoubleTapFinishLine', k)
             self._log('initialize the insert map "%s"', imap)
             self._vim.command(imap)
@@ -293,6 +369,10 @@ class DoubleTap(object):
             nmap = dt_nmap('DoubleTapFinishLine', k)
             self._log('initialize the normal map "%s"', nmap)
             self._vim.command(nmap)
+
+        #  for k, v in self.jump_map().items():
+        #      if v == 'disabled':
+        #          continue
 
     @neovim.function('DoubleTapInsert', sync=True)
     def double_tap_insert(self, args):
