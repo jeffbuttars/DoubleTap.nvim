@@ -22,14 +22,15 @@ LOGGER_DEBUG_FILE = '/tmp/doubletap_debug.log'
 logger_fd = logging.FileHandler(LOGGER_DEBUG_FILE)
 mod_logger.addHandler(logger_fd)
 
-SYN_STRING = [
-    'string', 'heredoc', 'doctestvalue',
+SYN_STRINGS = [
+    'string', 'quotes', 'heredoc', 'doctestvalue',
     'doctest', 'doctest2', 'bytesescape',
 ]
 
 # future configurable, in MS
 # configurable per map will be available
 DEFAULT_KEY_TIMEOUT = 750
+INSERT_IN_STRING = 0
 
 """
 Default insert map for all file types
@@ -56,13 +57,13 @@ FINISHERS_MAP = {
 Default jump map values
 """
 JUMP_MAP = {
-    ")": ')',
-    "]": ']',
-    "}": '}',
-    ">": '>',
-    "'": 'string',
-    '"': 'string',
-    "`": 'string',
+    ")": {'l': '(', 'm': '', 'r': ')'},
+    "]": {'l': '[', 'm': '', 'r': ']'},
+    "}": {'l': '{', 'm': '', 'r': '}'},
+    ">": {'l': '<', 'm': '', 'r': '>'},
+    #  "'": {'l': "'", 'm': '', 'r':  "'"},
+    #  '"': {'l': '"', 'm': '', 'r': '"'},
+    #  "`": {'l': '`', 'm': '', 'r': '`'},
 }
 
 
@@ -99,24 +100,24 @@ class VimLog(object):
 class DTConfig(VimLog):
     def __init__(self, vim):
         super(DTConfig, self).__init__(vim)
-        self._log("DTConfig::__init__")
+        #  self._log("DTConfig::__init__")
 
         self.dt_globals = {
             'finishers': FINISHERS_MAP.copy(),
             'insert': INSERT_MAP.copy(),
             'jump': JUMP_MAP.copy(),
-            'timeout': DEFAULT_KEY_TIMEOUT
+            'timeout': DEFAULT_KEY_TIMEOUT,
+            'insert_in_string': INSERT_IN_STRING,
         }
 
         self.dt_ft = {}
 
     def __getattr__(self, name):
-        self._log("DTConfig::__getattr__ %s", name)
-
+        #  self._log("DTConfig::__getattr__ %s", name)
         if name in self.dt_globals:
-            self._log("DTConfig::__getattr__ vim var %s : %s",
-                      name,
-                      self.dt_ft.get(self.filetype(), {}).get(name, self.dt_globals.get(name)))
+            #  self._log("DTConfig::__getattr__ vim var %s : %s",
+                      #  name,
+                      #  self.dt_ft.get(self.filetype(), {}).get(name, self.dt_globals.get(name)))
             return self.dt_ft.get(self.filetype(), {}).get(name, self.dt_globals.get(name))
 
         return self.__getattribute__(name)
@@ -180,7 +181,6 @@ class DoubleTap(VimLog):
     def mode(self):
         return self._vim.eval('mode()').lower()
 
-
     def in_string(self, pos=None):
         try:
             line = pos and pos[0] or 'line(".")'
@@ -191,12 +191,15 @@ class DoubleTap(VimLog):
             col = 'col(".")'
 
         syn = self._vim.eval(
-            'synIDattr(synID(line("."), col("."), 1), "name")' % (line, col)
+            'synIDattr(synID(%s, %s, 1), "name")' % (line, col)
         ).lower()
 
-        for symbol in SYN_STRING:
-            if syn in symbol:
-                return True
+        self._log('in_string syn: "%s"', syn)
+
+        if syn:
+            for symbol in SYN_STRINGS:
+                if symbol in syn:
+                    return True
 
         return False
 
@@ -206,14 +209,30 @@ class DoubleTap(VimLog):
         char = pos[1]
         return self._vim.current.buffer[line][char]
 
+    def _buf_data(self):
+        window = self._vim.current.window
+        pos = self._vim.current.window.cursor
+        buf = self._vim.current.buffer
+        line = pos[0] - 1
+        char = pos[1]
+
+        return {
+            'window': window,
+            'buffer': buf,
+            'pos': pos,
+            'line': line,
+            'char': char,
+            'buf_line': buf[line],
+            'buf_char': buf[line][char - 1],
+        }
+
     def _cut_back(self, r, inline=False, set_pos=False):
         # Return the current line 'cut back' r characters from the current cursor pos
         # Set the current line value to new line if inline is True
-        pos = self._vim.current.window.cursor
-        line = pos[0] - 1
-        char = pos[1]
-        buf = self._vim.current.buffer
-        buf_line = buf[line]
+        buf_data = self._buf_data()
+        char = buf_data['char']
+        line = buf_data['line']
+        buf_line = buf_data['buf_line']
         self._log("_cut_back orign '%s'", buf_line)
 
         buf_line_l = buf_line[0: char - r]
@@ -222,15 +241,21 @@ class DoubleTap(VimLog):
         self._log("_cut_back new '%s'", new_line)
 
         if inline:
-            buf[line] = new_line
+            buf_data['buffer'][line] = new_line
 
         if set_pos:
             self._vim.current.window.cursor = (line + 1, char - r)
 
         return new_line
 
-    def _is_double_tap(self, key):
-        self._log("_is_double_tap %s", self._key_stack)
+    def _is_double_tap(self, key, buf_data=None):
+        #  self._log("_is_double_tap %s", self._key_stack)
+        #  self._log("_is_double_tap in string? %s", self.in_string())
+
+        # If we're in string, check if we allow double tap
+        if self.in_string() and not self._config.insert_in_string:
+            #  self._log("_is_double_tap in string, ignoring key")
+            return None
 
         kdata = {
             'key': key,
@@ -239,13 +264,13 @@ class DoubleTap(VimLog):
 
         if self._key_stack is None:
             self._key_stack = [kdata]
-            self._log("_is_double_tap None stack %s", self._key_stack)
+            #  self._log("_is_double_tap None stack %s", self._key_stack)
             return None
 
         self._key_stack.append(kdata)
 
         if len(self._key_stack) < 2:
-            self._log("_is_double_tap short stack")
+            #  self._log("_is_double_tap short stack")
             return None
 
         if key != self._key_stack[-2]['key']:
@@ -259,17 +284,26 @@ class DoubleTap(VimLog):
             self._key_stack = [kdata]
             return None
 
+        # enforce the last char in the buffer is the same as the double tap key
+        buf_data = buf_data or self._buf_data()
+        #  self._log("_is_double_tap buf_data %s", buf_data)
+        if self.mode == 'i' and key != buf_data['buf_char']:
+            #  self._log("_is_double_tap cur buf char %s does not match key", buf_data['buf_char'])
+            self._key_stack = []
+            return None
+
+        self._log("_is_double_tap good")
         return kdata
 
     def _process_finish_line_key(self, key):
         self._log("_process_finish_line_key %s", key)
 
-        if not self._is_double_tap(key):
+        buf_data = self._buf_data()
+        if not self._is_double_tap(key, buf_data):
             return key
 
-        pos = self._vim.current.window.cursor
-        buf = self._vim.current.buffer
-        ln = pos[0] - 1
+        buf = buf_data['buffer']
+        ln = buf_data['line']
 
         line = self.mode == 'i' and self._cut_back(1, set_pos=True) or buf[ln]
         line = line.rstrip()
@@ -300,15 +334,29 @@ class DoubleTap(VimLog):
 
         return key
 
-    def _process_insert_key(self, key):
-        self._log("process_keys %s", self._key_stack)
+    def _process_jump(self, key):
+        self._log("_process_jump %s", self._key_stack)
 
         if not self._is_double_tap(key):
             return key
 
+        kconf = self._config.jump[key]
+        self._log("_process_jump config %s : %s", key, kconf)
+        self._vim.eval('searchpair("%s", "%s", "%s")' % (
+            kconf.get('l', ''), kconf.get('m', ''), kconf.get('r', ''))
+        )
+
+        return key
+
+    def _process_insert_key(self, key):
+        self._log("process_keys %s", self._key_stack)
+
+        buf_data = self._buf_data()
+        if not self._is_double_tap(key, buf_data):
+            return key
+
         ks_len = len(self._key_stack)
         self._key_stack = None
-        #  insert = INSERT_MAP[key]
         insert = self._config.insert[key]
         self._last_insert = insert
 
@@ -337,14 +385,14 @@ class DoubleTap(VimLog):
 
     @neovim.autocmd('BufEnter', pattern='*', eval='expand("%:p")', sync=True)
     def autocmd_handler_bufenter(self, filename):
-        self._log("autocmd_handler_bufenter initializing %s ", filename)
-        self._log('autocmd_handler_bufenter initialize the insert maps')
+        #  self._log("autocmd_handler_bufenter initializing %s ", filename)
+        #  self._log('autocmd_handler_bufenter initialize the insert maps')
 
         self._config.update_ft()
 
-        self._log('autocmd_handler_bufenter updated finishers %s', self._config.finishers)
-        self._log('autocmd_handler_bufenter updated inserters %s', self._config.insert)
-        self._log('autocmd_handler_bufenter updated timeout %s', self._config.timeout)
+        #  self._log('autocmd_handler_bufenter updated finishers %s', self._config.finishers)
+        #  self._log('autocmd_handler_bufenter updated inserters %s', self._config.insert)
+        #  self._log('autocmd_handler_bufenter updated timeout %s', self._config.timeout)
 
         im = self._config.insert
         for k, v in im.items():
@@ -352,12 +400,12 @@ class DoubleTap(VimLog):
                 continue
 
             imap = dt_imap('DoubleTapInsert', k)
-            self._log('initialize the insert map "%s"', imap)
+            #  self._log('initialize the insert map "%s"', imap)
             self._vim.command(imap)
 
             if im[k].get('r') and k != im[k]['r']:
                 imap = dt_imap('DoubleTapRightsert', im[k]['r'])
-                self._log('initialize the rightsert map "%s"', imap)
+                #  self._log('initialize the rightsert map "%s"', imap)
                 self._vim.command(imap)
 
         for k, v in self._config.finishers.items():
@@ -365,16 +413,20 @@ class DoubleTap(VimLog):
                 continue
 
             imap = dt_imap('DoubleTapFinishLine', k)
-            self._log('initialize the insert map "%s"', imap)
+            #  self._log('initialize the insert map "%s"', imap)
             self._vim.command(imap)
 
             nmap = dt_nmap('DoubleTapFinishLine', k)
-            self._log('initialize the normal map "%s"', nmap)
+            #  self._log('initialize the normal map "%s"', nmap)
             self._vim.command(nmap)
 
-        #  for k, v in self.jump_map().items():
-        #      if v == 'disabled':
-        #          continue
+        for k, v in self._config.jump.items():
+            if v == 'disabled':
+                continue
+
+            imap = dt_imap('DoubleTapJump', k)
+            self._log('initialize the jump map "%s"', imap)
+            self._vim.command(imap)
 
     @neovim.function('DoubleTapInsert', sync=True)
     def double_tap_insert(self, args):
@@ -405,3 +457,13 @@ class DoubleTap(VimLog):
 
         self._log("double_tap_finish_line %s ", key)
         return self._process_finish_line_key(key)
+
+    @neovim.function('DoubleTapJump', sync=True)
+    def double_tap_jump(self, args):
+        try:
+            key = args[0]
+        except IndexError:
+            return ''
+
+        self._log("double_tap_jump %s ", key)
+        return self._process_jump(key)
