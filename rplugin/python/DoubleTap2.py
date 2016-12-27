@@ -2,6 +2,13 @@ import neovim
 import time
 import logging
 
+"""Version 2 of the Neovim DoubleTap plugin
+TODO:
+    * Add auto close without the need for a double tap. This is how most pair plugins work.
+        * Make this optional at the per character level. Some auto, some don't
+    * Add jump out support back.
+"""
+
 # Set up the logger
 mod_logger = logging.getLogger(__name__)
 # Use a console handler, set it to debug by default
@@ -17,6 +24,9 @@ mod_logger.addHandler(logger_fd)
 # configurable per map will be available
 DEFAULT_KEY_TIMEOUT = 750
 
+"""
+Default insert map for all file types
+"""
 INSERT_MAP = {
     "(": {'insert': '()', 'r': ')'},
     "[": {'insert': '[]', 'r': ']'},
@@ -26,6 +36,9 @@ INSERT_MAP = {
     "`": {'insert': "``"},
 }
 
+"""
+Default finishers map for all file types
+"""
 FINISHERS_MAP = {
     ';': ';',
     ',': ',',
@@ -33,6 +46,7 @@ FINISHERS_MAP = {
 
 
 def dt_imap(func, key):
+    # build the imap string for a function and key
     if key == "'":
         imap = "imap <silent> %s <C-R>=%s(\"%s\")<CR>" % (key, func, key)
     else:
@@ -43,6 +57,7 @@ def dt_imap(func, key):
 
 
 def dt_nmap(func, key):
+    # build the nmap string for a function and key
     if key == "'":
         nmap = "nmap <silent> %s <ESC>:call %s(\"%s\")<CR>" % (key, func, key)
     else:
@@ -74,6 +89,7 @@ class DoubleTap(object):
         return self._vim.eval('&filetype')
 
     def finishers_map(self):
+        # Get the finishers map. Will be built and cached the first access
         ft = self.filetype()
         if self._finishers_map.get(ft):
             return self._finishers_map[ft]
@@ -84,6 +100,7 @@ class DoubleTap(object):
         return self._finishers_map[ft]
 
     def insert_map(self):
+        # Get the insert map. Will be built and cached the first access
         ft = self.filetype()
         if self._insert_map.get(ft):
             return self._insert_map[ft]
@@ -94,6 +111,8 @@ class DoubleTap(object):
         return self._insert_map[ft]
 
     def lookup_var(self, vname, defl=None):
+        # Lookup a Vim variable from the current instance. Provides
+        # the defl value if the variable doesn't exist.
         if self._vim.eval('exists("%s")' % vname):
             return self._vim.eval("%s" % vname)
 
