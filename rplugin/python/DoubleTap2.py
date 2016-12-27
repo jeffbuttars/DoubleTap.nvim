@@ -87,12 +87,19 @@ def dt_nmap(func, key):
     mod_logger.debug('creating nmap: %s', nmap)
     return nmap
 
-
-class DTConfig(object):
+class VimLog(object):
     def __init__(self, vim):
         self._logger = mod_logger
-        self._log("DTConfig::__init__")
         self._vim = vim
+
+    def _log(self, *args, **kwargs):
+        self._logger.debug(*args, **kwargs)
+
+
+class DTConfig(VimLog):
+    def __init__(self, vim):
+        super(DTConfig, self).__init__(vim)
+        self._log("DTConfig::__init__")
 
         self.dt_globals = {
             'finishers': FINISHERS_MAP.copy(),
@@ -107,9 +114,9 @@ class DTConfig(object):
         self._log("DTConfig::__getattr__ %s", name)
 
         if name in self.dt_globals:
-            self._log("DTConfig::__getattr__ vim var %s : %s", name, self.dt_globals.get(name))
-            #  self._log("DTConfig::__getattr__ vim var %s : %s", name, self.find_config_var(name))
-            #  return self.find_config_var(name)
+            self._log("DTConfig::__getattr__ vim var %s : %s",
+                      name,
+                      self.dt_ft.get(self.filetype(), {}).get(name, self.dt_globals.get(name)))
             return self.dt_ft.get(self.filetype(), {}).get(name, self.dt_globals.get(name))
 
         return self.__getattribute__(name)
@@ -145,28 +152,26 @@ class DTConfig(object):
             return
 
         self._log('update_ft %s building cache ...', ft)
+        cache = {}
         for k, v in self.dt_globals.items():
             self._log('update_ft %s building cache %s : %s', ft, k, v)
             if type(v) is dict:
-                self.dt_ft[k] = v.copy()
-                cv = self.ft_var(k, self.dt_ft[k])
-                self.dt_ft[k].update(cv)
+                cache[k] = v.copy()
+                cv = self.ft_var(k, cache[k])
+                cache[k].update(cv)
             else:
-                self.dt_ft[k] = self.ft_var(k, v)
+                cache[k] = self.ft_var(k, v)
 
-            self._log('update_ft %s built cache value %s : %s', ft, k, self.dt_ft[k])
-
-    def _log(self, *args, **kwargs):
-        self._logger.debug(*args, **kwargs)
+            self.dt_ft[ft] = cache
+            self._log('update_ft %s built cache value %s : %s', ft, k, self.dt_ft[ft])
 
 
 @neovim.plugin
-class DoubleTap(object):
+class DoubleTap(VimLog):
 
     def __init__(self, vim):
-        self._logger = mod_logger
+        super(DoubleTap, self).__init__(vim)
         self._log("DoubleTap::__init__")
-        self._vim = vim
         self._key_stack = []
         self._last_insert = None
         self._config = DTConfig(vim)
@@ -194,9 +199,6 @@ class DoubleTap(object):
                 return True
 
         return False
-
-    def _log(self, *args, **kwargs):
-        self._logger.debug(*args, **kwargs)
 
     def _cur_char(self):
         pos = self._vim.current.window.cursor
