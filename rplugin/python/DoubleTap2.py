@@ -17,11 +17,11 @@ mod_logger.addHandler(logger_fd)
 # configurable per map will be available
 DEFAULT_KEY_TIMEOUT = 750
 
-insert_map = {
-    "(": {'insert': '()', 'bs': 1, 'r': ')'},
-    "[": {'insert': '[]', 'bs': 1, 'r': ']'},
-    "{": {'insert': '{}', 'bs': 1, 'r': '}'},
-    "<": {'insert': '<>', 'bs': 1, 'r': '>'},
+INSERT_MAP = {
+    "(": {'insert': '()', 'r': ')'},
+    "[": {'insert': '[]', 'r': ']'},
+    "{": {'insert': '{}', 'r': '}'},
+    "<": {'insert': '<>', 'r': '>'},
     "'": {'insert': "''"},
     "`": {'insert': "``"},
 }
@@ -64,6 +64,7 @@ class DoubleTap(object):
         self._key_stack = []
         self._last_insert = None
         self._finishers_map = {}
+        self._insert_map = {}
 
     @property
     def mode(self):
@@ -82,6 +83,16 @@ class DoubleTap(object):
         self._log('finishers_map %s', self._finishers_map[ft])
         return self._finishers_map[ft]
 
+    def insert_map(self):
+        ft = self.filetype()
+        if self._insert_map.get(ft):
+            return self._insert_map[ft]
+
+        self._insert_map[ft] = INSERT_MAP.copy()
+        self._insert_map[ft].update(self.ft_var('insert', {}))
+        self._log('insert_map %s', self._insert_map[ft])
+        return self._insert_map[ft]
+
     def lookup_var(self, vname, defl=None):
         if self._vim.eval('exists("%s")' % vname):
             return self._vim.eval("%s" % vname)
@@ -90,7 +101,10 @@ class DoubleTap(object):
 
     def ft_var(self, vname, defl=None):
         ft = self.filetype()
-        return self.lookup_var('g:doubletap_%s_%s' % (ft, vname), defl=defl)
+        return self.dt_var('%s_%s' % (ft, vname), defl=self.dt_var(vname, defl=defl))
+
+    def dt_var(self, vname, defl=None):
+        return self.lookup_var('g:doubletap_%s' % vname, defl=defl)
 
     def _log(self, *args, **kwargs):
         self._logger.debug(*args, **kwargs)
@@ -203,7 +217,8 @@ class DoubleTap(object):
 
         ks_len = len(self._key_stack)
         self._key_stack = None
-        insert = insert_map[key]
+        #  insert = INSERT_MAP[key]
+        insert = self.insert_map()[key]
         self._last_insert = insert
 
         # erase previous keys, insert our characters and reposition the cursor.
@@ -223,11 +238,10 @@ class DoubleTap(object):
         new_line = buf_line_l + insert['insert'] + buf_line_r
 
         self._log("process_keys, new line: '%s'", new_line)
-        self._log("process_keys, new pos: %s:%s", pos[0], char - insert.get('bs', 1))
+        self._log("process_keys, new pos: %s:%s", pos[0], char - int(insert.get('bs', 0)))
         buf[line] = new_line
 
-        # Change buf from 'll' to 'lr' with the cursor back on space
-        #  self._vim.current.window.cursor = (pos[0], char - 1)
+        self._vim.current.window.cursor = (pos[0], char - int(insert.get('bs', 0)))
         return ''
 
     @neovim.autocmd('BufEnter', pattern='*', eval='expand("%:p")', sync=True)
@@ -235,15 +249,20 @@ class DoubleTap(object):
         self._log("autocmd_handler_bufenter initializing %s ", filename)
         self._log('autocmd_handler_bufenter initialize the insert maps')
 
-        self._log('autocmd_handler_bufenter updated finishers %s', self.finishers_map())
+        self._key_tout = self.ft_var('timeout', DEFAULT_KEY_TIMEOUT)
 
-        for k in insert_map:
+        self._log('autocmd_handler_bufenter updated finishers %s', self.finishers_map())
+        self._log('autocmd_handler_bufenter updated inserters %s', self.insert_map())
+        self._log('autocmd_handler_bufenter updated timeout %s', self._key_tout)
+
+        im = self.insert_map()
+        for k in im:
             imap = dt_imap('DoubleTapInsert', k)
             self._log('initialize the insert map "%s"', imap)
             self._vim.command(imap)
 
-            if insert_map[k].get('r') and k != insert_map[k]['r']:
-                imap = dt_imap('DoubleTapRightsert', insert_map[k]['r'])
+            if im[k].get('r') and k != im[k]['r']:
+                imap = dt_imap('DoubleTapRightsert', im[k]['r'])
                 self._log('initialize the rightsert map "%s"', imap)
                 self._vim.command(imap)
 
