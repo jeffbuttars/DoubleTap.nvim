@@ -6,9 +6,8 @@ import logging
 TODO:
     * Add auto close without the need for a double tap. This is how most pair plugins work.
         * Make this optional at the per character level. Some auto, some don't
-    * Add jump out support back.
-    * Support 'disable' flag
-    * Bring in surround taps
+    * Add jump out support back, basic searchpair exists
+    * Bring in surround taps from aaahacks file
 """
 
 # Set up the logger
@@ -40,9 +39,9 @@ INSERT_MAP = {
     "[": {'insert': '[]', 'r': ']'},
     "{": {'insert': '{}', 'r': '}'},
     "<": {'insert': '<>', 'r': '>'},
-    "'": {'insert': "''"},
-    '"': {'insert': '""'},
-    "`": {'insert': "``"},
+    "'": {'insert': "''", 'string': True},
+    '"': {'insert': '""', 'string': True},
+    "`": {'insert': "``", 'string': True},
 }
 
 """
@@ -226,19 +225,19 @@ class DoubleTap(VimLog):
             'buf_char': buf[line][char - 1],
         }
 
-    def _cut_back(self, r, inline=False, set_pos=False):
+    def _cut_back(self, r, inline=False, set_pos=False, buf_data=None):
         # Return the current line 'cut back' r characters from the current cursor pos
         # Set the current line value to new line if inline is True
-        buf_data = self._buf_data()
+        buf_data = buf_data or self._buf_data()
         char = buf_data['char']
         line = buf_data['line']
         buf_line = buf_data['buf_line']
-        self._log("_cut_back orign '%s'", buf_line)
+        #  self._log("_cut_back orign '%s'", buf_line)
 
         buf_line_l = buf_line[0: char - r]
         buf_line_r = buf_line[char:]
         new_line = buf_line_l + buf_line_r
-        self._log("_cut_back new '%s'", new_line)
+        #  self._log("_cut_back new '%s'", new_line)
 
         if inline:
             buf_data['buffer'][line] = new_line
@@ -248,13 +247,13 @@ class DoubleTap(VimLog):
 
         return new_line
 
-    def _is_double_tap(self, key, buf_data=None):
+    def _is_double_tap(self, key, buf_data=None, honor_in_string=True):
         #  self._log("_is_double_tap %s", self._key_stack)
         #  self._log("_is_double_tap in string? %s", self.in_string())
 
         # If we're in string, check if we allow double tap
-        if self.in_string() and not self._config.insert_in_string:
-            #  self._log("_is_double_tap in string, ignoring key")
+        if honor_in_string and self.in_string() and not self._config.insert_in_string:
+            self._log("_is_double_tap in string, ignoring key")
             return None
 
         kdata = {
@@ -295,17 +294,17 @@ class DoubleTap(VimLog):
         self._log("_is_double_tap good")
         return kdata
 
-    def _process_finish_line_key(self, key):
+    def _process_finish_line_key(self, key, buf_data=None):
         self._log("_process_finish_line_key %s", key)
 
-        buf_data = self._buf_data()
+        buf_data = buf_data or self._buf_data()
         if not self._is_double_tap(key, buf_data):
             return key
 
         buf = buf_data['buffer']
         ln = buf_data['line']
 
-        line = self.mode == 'i' and self._cut_back(1, set_pos=True) or buf[ln]
+        line = self.mode == 'i' and self._cut_back(1, set_pos=True, buf_data=buf_data) or buf[ln]
         line = line.rstrip()
         fm = self._config.finishers
 
@@ -337,27 +336,46 @@ class DoubleTap(VimLog):
     def _process_jump(self, key):
         self._log("_process_jump %s", self._key_stack)
 
-        if not self._is_double_tap(key):
+        buf_data = self._buf_data()
+        if not self._is_double_tap(key, buf_data=buf_data, honor_in_string=False):
             return key
 
         kconf = self._config.jump[key]
         self._log("_process_jump config %s : %s", key, kconf)
-        self._vim.eval('searchpair("%s", "%s", "%s")' % (
-            kconf.get('l', ''), kconf.get('m', ''), kconf.get('r', ''))
-        )
 
-        return key
+        # This is a bit funny, we have to cut the line before we do the search.
+        # If the search fails, put the characters back!
+
+        line = self._cut_back(1, set_pos=False, inline=True, buf_data=buf_data)
+        self._log("_process_jump line: %s", line)
+
+        search = 'searchpair("%s", "%s", "%s")' % (
+            kconf.get('l', ''), kconf.get('m', ''), kconf.get('r', ''))
+        self._log("_process_jump search %s", search)
+        sp = self._vim.eval(search)
+
+        self._log("_process_jump sp: %s", sp)
+        if sp < 1:
+            self._log("_process_jump no match found")
+            return key * 2
+
+        # Advance the cursor past the match
+        buf_data = self._buf_data()
+        pos = buf_data['pos']
+        buf_data['window'].cursor = (pos[0], pos[1] + 1)
+        return ''
 
     def _process_insert_key(self, key):
         self._log("process_keys %s", self._key_stack)
 
         buf_data = self._buf_data()
-        if not self._is_double_tap(key, buf_data):
+        insert = self._config.insert[key]
+        his = not insert.get('string')
+        if not self._is_double_tap(key, buf_data=buf_data, honor_in_string=his):
             return key
 
         ks_len = len(self._key_stack)
         self._key_stack = None
-        insert = self._config.insert[key]
         self._last_insert = insert
 
         # erase previous keys, insert our characters and reposition the cursor.
