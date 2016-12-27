@@ -26,7 +26,7 @@ insert_map = {
     "`": {'insert': "``"},
 }
 
-finishers_map = {
+FINISHERS_MAP = {
     ';': ';',
     ',': ',',
 }
@@ -63,6 +63,34 @@ class DoubleTap(object):
         self._key_tout = DEFAULT_KEY_TIMEOUT
         self._key_stack = []
         self._last_insert = None
+        self._finishers_map = {}
+
+    @property
+    def mode(self):
+        return self._vim.eval('mode()').lower()
+
+    def filetype(self):
+        return self._vim.eval('&filetype')
+
+    def finishers_map(self):
+        ft = self.filetype()
+        if self._finishers_map.get(ft):
+            return self._finishers_map[ft]
+
+        self._finishers_map[ft] = FINISHERS_MAP.copy()
+        self._finishers_map[ft].update(self.ft_var('finishers', {}))
+        self._log('finishers_map %s', self._finishers_map[ft])
+        return self._finishers_map[ft]
+
+    def lookup_var(self, vname, defl=None):
+        if self._vim.eval('exists("%s")' % vname):
+            return self._vim.eval("%s" % vname)
+
+        return defl
+
+    def ft_var(self, vname, defl=None):
+        ft = self.filetype()
+        return self.lookup_var('g:doubletap_%s_%s' % (ft, vname), defl=defl)
 
     def _log(self, *args, **kwargs):
         self._logger.debug(*args, **kwargs)
@@ -137,13 +165,13 @@ class DoubleTap(object):
         pos = self._vim.current.window.cursor
         buf = self._vim.current.buffer
         ln = pos[0] - 1
-        line = buf[ln].rstrip()
 
-        if self._vim.eval('mode()').lower() == 'i':
-            line = self._cut_back(1, set_pos=True).rstrip()
+        line = self.mode == 'i' and self._cut_back(1, set_pos=True) or buf[ln]
+        line = line.rstrip()
+        fm = self.finishers_map()
 
-        if finishers_map[key] and line[-1] != finishers_map[key]:
-            line += finishers_map.get(key, '')
+        if fm[key] and line[-1] != fm[key]:
+            line += fm.get(key, '')
 
         buf[ln] = line
         return ''
@@ -207,6 +235,8 @@ class DoubleTap(object):
         self._log("autocmd_handler_bufenter initializing %s ", filename)
         self._log('autocmd_handler_bufenter initialize the insert maps')
 
+        self._log('autocmd_handler_bufenter updated finishers %s', self.finishers_map())
+
         for k in insert_map:
             imap = dt_imap('DoubleTapInsert', k)
             self._log('initialize the insert map "%s"', imap)
@@ -217,7 +247,7 @@ class DoubleTap(object):
                 self._log('initialize the rightsert map "%s"', imap)
                 self._vim.command(imap)
 
-        for k in finishers_map:
+        for k in self.finishers_map():
             imap = dt_imap('DoubleTapFinishLine', k)
             self._log('initialize the insert map "%s"', imap)
             self._vim.command(imap)
