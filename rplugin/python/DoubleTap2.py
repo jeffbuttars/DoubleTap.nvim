@@ -8,6 +8,7 @@ TODO:
         * Make this optional at the per character level. Some auto, some don't
     * Add jump out support back, basic searchpair exists
     * Bring in surround taps from aaahacks file
+    * Fix walk off, it broke.
 """
 
 # Set up the logger
@@ -15,6 +16,7 @@ mod_logger = logging.getLogger(__name__)
 # Use a console handler, set it to debug by default
 logger_ch = logging.StreamHandler()
 mod_logger.setLevel(logging.DEBUG)
+#  mod_logger.setLevel(logging.INFO)
 mod_logger.addHandler(logger_ch)
 
 LOGGER_DEBUG_FILE = '/tmp/doubletap_debug.log'
@@ -206,7 +208,10 @@ class DoubleTap(VimLog):
         pos = self._vim.current.window.cursor
         line = pos[0] - 1
         char = pos[1]
-        return self._vim.current.buffer[line][char]
+        try:
+            return self._vim.current.buffer[line][char]
+        except IndexError:
+            return ''
 
     def _buf_data(self):
         window = self._vim.current.window
@@ -248,8 +253,7 @@ class DoubleTap(VimLog):
         return new_line
 
     def _is_double_tap(self, key, buf_data=None, honor_in_string=True):
-        #  self._log("_is_double_tap %s", self._key_stack)
-        #  self._log("_is_double_tap in string? %s", self.in_string())
+        self._log("_is_double_tap key: %s, honor: %s", key, honor_in_string)
 
         # If we're in string, check if we allow double tap
         if honor_in_string and self.in_string() and not self._config.insert_in_string:
@@ -298,7 +302,7 @@ class DoubleTap(VimLog):
         self._log("_process_finish_line_key %s", key)
 
         buf_data = buf_data or self._buf_data()
-        if not self._is_double_tap(key, buf_data):
+        if not self._is_double_tap(key, buf_data, honor_in_string=False):
             return key
 
         buf = buf_data['buffer']
@@ -316,12 +320,16 @@ class DoubleTap(VimLog):
 
     def _process_rightsert_key(self, key):
         self._log("_process_rightsert_key %s : %s", key, self._key_stack)
+        # Decide how to use this key, as a walk off or a possible jump.
 
-        if self._key_stack is None:
+        # If the stack is empty or the last key is not the same as the current,
+        # process a walk off.
+        if not self._key_stack or self._key_stack[-1]['key'] != key:
+            # "It's a walk off!"
             self._log("_process_rightsert_key None stack, cur char: %s", self._cur_char())
             # this is first time we've encountered this key press since the last time we inserted.
-            # See if we should 'walk out' of a matching pair
-            # if this matches the right char of the last pair insertion, 'walk out'
+            # See if we should 'walk off' of a matching pair
+            # if this matches the right char of the last pair insertion, 'walk off'
 
             self._key_stack = []
             if self._last_insert and self._last_insert.get('r') == self._cur_char():
@@ -331,7 +339,9 @@ class DoubleTap(VimLog):
                 self._vim.current.window.cursor = (line, char + 1)
                 return ''
 
-        return key
+        # It's not a walk off
+        # Could still be a jump out
+        return self._process_jump(key)
 
     def _process_jump(self, key):
         self._log("_process_jump %s", self._key_stack)
@@ -346,30 +356,37 @@ class DoubleTap(VimLog):
         # This is a bit funny, we have to cut the line before we do the search.
         # If the search fails, put the characters back!
 
-        line = self._cut_back(1, set_pos=False, inline=True, buf_data=buf_data)
-        self._log("_process_jump line: %s", line)
+        line = self._cut_back(1, set_pos=True, inline=True, buf_data=buf_data)
+        self._log("_process_jump line after cut: %s : %s : %s", buf_data['pos'], buf_data['buf_char'], line)
 
-        search = 'searchpair("%s", "%s", "%s")' % (
-            kconf.get('l', ''), kconf.get('m', ''), kconf.get('r', ''))
+        #  search = 'searchpair("%s", "%s", "%s")' % (
+        #      kconf.get('l', ''), kconf.get('m', ''), kconf.get('r', ''))
+
+        # Let Neovim do most of the work here. This will do the search and
+        # jump for us. We will need to advance the cursor by one if a match is made.
+        search = 'searchpos("%s", "Wze")' % (kconf.get('r', ''))
         self._log("_process_jump search %s", search)
         sp = self._vim.eval(search)
 
         self._log("_process_jump sp: %s", sp)
-        if sp < 1:
+        if (sp[0] + sp[1]) < 1:
             self._log("_process_jump no match found")
             return key * 2
 
-        # Advance the cursor past the match
+        # Advance the cursor past the match by one position
         buf_data = self._buf_data()
         pos = buf_data['pos']
         buf_data['window'].cursor = (pos[0], pos[1] + 1)
         return ''
 
     def _process_insert_key(self, key):
-        self._log("process_keys %s", self._key_stack)
+        self._log("process_keys key: %s, keystack: %s", key, self._key_stack)
 
         buf_data = self._buf_data()
-        insert = self._config.insert[key]
+        insert = self._config.insert.get(key, {})
+
+        self._log("process_keys k config: %s", insert)
+
         his = not insert.get('string')
         if not self._is_double_tap(key, buf_data=buf_data, honor_in_string=his):
             return key
@@ -413,6 +430,8 @@ class DoubleTap(VimLog):
         #  self._log('autocmd_handler_bufenter updated timeout %s', self._config.timeout)
 
         im = self._config.insert
+        right_serts = []
+
         for k, v in im.items():
             if v.get('disabled'):
                 continue
@@ -423,7 +442,8 @@ class DoubleTap(VimLog):
 
             if im[k].get('r') and k != im[k]['r']:
                 imap = dt_imap('DoubleTapRightsert', im[k]['r'])
-                #  self._log('initialize the rightsert map "%s"', imap)
+                right_serts.append(im[k]['r'])
+                self._log('initialize the rightsert map "%s"', imap)
                 self._vim.command(imap)
 
         for k, v in self._config.finishers.items():
@@ -439,10 +459,10 @@ class DoubleTap(VimLog):
             self._vim.command(nmap)
 
         for k, v in self._config.jump.items():
-            if v == 'disabled':
+            if v == 'disabled' or k in right_serts:
                 continue
 
-            imap = dt_imap('DoubleTapJump', k)
+            imap = dt_imap('DoubleTapRightsert', k)
             self._log('initialize the jump map "%s"', imap)
             self._vim.command(imap)
 
@@ -475,13 +495,3 @@ class DoubleTap(VimLog):
 
         self._log("double_tap_finish_line %s ", key)
         return self._process_finish_line_key(key)
-
-    @neovim.function('DoubleTapJump', sync=True)
-    def double_tap_jump(self, args):
-        try:
-            key = args[0]
-        except IndexError:
-            return ''
-
-        self._log("double_tap_jump %s ", key)
-        return self._process_jump(key)
