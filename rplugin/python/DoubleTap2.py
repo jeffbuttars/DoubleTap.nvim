@@ -1,27 +1,27 @@
+import os
 import neovim
 import time
 import logging
 
 """Version 2 of the Neovim DoubleTap plugin
-TODO:
-    * Add auto close without the need for a double tap. This is how most pair plugins work.
-        * Make this optional at the per character level. Some auto, some don't
-    * Add jump out support back, basic searchpair exists
-    * Bring in surround taps from aaahacks file
-    * Fix walk off, it broke.
 """
+
+# Get some config from the env
+NEOVIM_DOUBLETAP_LOG_LEVEL = os.environ.get('NEOVIM_DOUBLETAP_LOG_LEVEL', 'INFO')
+NEOVIM_DOUBLETAP_LOG_FILE = os.environ.get('NEOVIM_DOUBLETAP_LOG_FILE')
 
 # Set up the logger
 mod_logger = logging.getLogger(__name__)
-# Use a console handler, set it to debug by default
-logger_ch = logging.StreamHandler()
-mod_logger.setLevel(logging.DEBUG)
-#  mod_logger.setLevel(logging.INFO)
-mod_logger.addHandler(logger_ch)
+mod_logger.setLevel(getattr(logging, NEOVIM_DOUBLETAP_LOG_LEVEL, 'INFO'))
 
-LOGGER_DEBUG_FILE = '/tmp/doubletap_debug.log'
-logger_fd = logging.FileHandler(LOGGER_DEBUG_FILE)
-mod_logger.addHandler(logger_fd)
+if NEOVIM_DOUBLETAP_LOG_FILE:
+    # Use a console handler if NEOVIM_DOUBLETAP_LOG_FILE is '-'
+    if NEOVIM_DOUBLETAP_LOG_FILE == '-':
+        logger_ch = logging.StreamHandler()
+        mod_logger.addHandler(logger_ch)
+    else:
+        logger_fd = logging.FileHandler(NEOVIM_DOUBLETAP_LOG_FILE)
+        mod_logger.addHandler(logger_fd)
 
 SYN_STRINGS = [
     'string', 'quotes', 'heredoc', 'doctestvalue',
@@ -58,13 +58,13 @@ FINISHERS_MAP = {
 Default jump map values
 """
 JUMP_MAP = {
-    ")": {'l': '(', 'm': '', 'r': ')'},
-    "]": {'l': '[', 'm': '', 'r': ']'},
-    "}": {'l': '{', 'm': '', 'r': '}'},
-    ">": {'l': '<', 'm': '', 'r': '>'},
-    #  "'": {'l': "'", 'm': '', 'r':  "'"},
-    #  '"': {'l': '"', 'm': '', 'r': '"'},
-    #  "`": {'l': '`', 'm': '', 'r': '`'},
+    ")": {'r': ')'},
+    "]": {'r': ']'},
+    "}": {'r': '}'},
+    ">": {'r': '>'},
+    #  "'": {'string': True},
+    #  '"': {'string': True},
+    #  "`": {'string': True},
 }
 
 
@@ -204,7 +204,7 @@ class DoubleTap(VimLog):
 
         return False
 
-    def _cur_char(self):
+    def _cur_char(self, buf_data=None):
         pos = self._vim.current.window.cursor
         line = pos[0] - 1
         char = pos[1]
@@ -267,13 +267,13 @@ class DoubleTap(VimLog):
 
         if self._key_stack is None:
             self._key_stack = [kdata]
-            #  self._log("_is_double_tap None stack %s", self._key_stack)
+            self._log("_is_double_tap None stack %s", self._key_stack)
             return None
 
         self._key_stack.append(kdata)
 
         if len(self._key_stack) < 2:
-            #  self._log("_is_double_tap short stack")
+            self._log("_is_double_tap short stack")
             return None
 
         if key != self._key_stack[-2]['key']:
@@ -291,7 +291,7 @@ class DoubleTap(VimLog):
         buf_data = buf_data or self._buf_data()
         #  self._log("_is_double_tap buf_data %s", buf_data)
         if self.mode == 'i' and key != buf_data['buf_char']:
-            #  self._log("_is_double_tap cur buf char %s does not match key", buf_data['buf_char'])
+            self._log("_is_double_tap cur buf char %s does not match key", buf_data['buf_char'])
             self._key_stack = []
             return None
 
@@ -318,59 +318,64 @@ class DoubleTap(VimLog):
         buf[ln] = line
         return ''
 
+    def _walk_off(self):
+        self._log("_walk_off last %s, cur char: %s", self._last_insert, self._cur_char())
+        # this is first time we've encountered this key press since the last time we inserted.
+        # See if we should 'walk off' of a matching pair
+        # if this matches the right char of the last pair insertion, 'walk off'
+
+        if self._last_insert and self._last_insert.get('r') == self._cur_char():
+            self._log("_walk_off It's a walk off!")
+            # "It's a walk off!"
+            pos = self._vim.current.window.cursor
+            line = pos[0]
+            char = pos[1]
+            self._vim.current.window.cursor = (line, char + 1)
+            return True
+
+        self._log("_walk_off _not_ a walk off")
+        return False
+
     def _process_rightsert_key(self, key):
         self._log("_process_rightsert_key %s : %s", key, self._key_stack)
         # Decide how to use this key, as a walk off or a possible jump.
 
         # If the stack is empty or the last key is not the same as the current,
-        # process a walk off.
+        # process a possible walk off.
         if not self._key_stack or self._key_stack[-1]['key'] != key:
-            # "It's a walk off!"
-            self._log("_process_rightsert_key None stack, cur char: %s", self._cur_char())
-            # this is first time we've encountered this key press since the last time we inserted.
-            # See if we should 'walk off' of a matching pair
-            # if this matches the right char of the last pair insertion, 'walk off'
-
             self._key_stack = []
-            if self._last_insert and self._last_insert.get('r') == self._cur_char():
-                pos = self._vim.current.window.cursor
-                line = pos[0]
-                char = pos[1]
-                self._vim.current.window.cursor = (line, char + 1)
+            if self._walk_off():
                 return ''
 
         # It's not a walk off
         # Could still be a jump out
-        return self._process_jump(key)
+        return self._process_jump_key(key)
 
-    def _process_jump(self, key):
-        self._log("_process_jump %s", self._key_stack)
+    def _process_jump_key(self, key):
+        self._log("_process_jump_key %s", self._key_stack)
 
         buf_data = self._buf_data()
         if not self._is_double_tap(key, buf_data=buf_data, honor_in_string=False):
             return key
 
         kconf = self._config.jump[key]
-        self._log("_process_jump config %s : %s", key, kconf)
+        self._log("_process_jump_key config %s : %s", key, kconf)
 
         # This is a bit funny, we have to cut the line before we do the search.
         # If the search fails, put the characters back!
 
         line = self._cut_back(1, set_pos=True, inline=True, buf_data=buf_data)
-        self._log("_process_jump line after cut: %s : %s : %s", buf_data['pos'], buf_data['buf_char'], line)
-
-        #  search = 'searchpair("%s", "%s", "%s")' % (
-        #      kconf.get('l', ''), kconf.get('m', ''), kconf.get('r', ''))
+        self._log("_process_jump_key line after cut: %s : %s : %s", buf_data['pos'], buf_data['buf_char'], line)
 
         # Let Neovim do most of the work here. This will do the search and
         # jump for us. We will need to advance the cursor by one if a match is made.
         search = 'searchpos("%s", "Wze")' % (kconf.get('r', ''))
-        self._log("_process_jump search %s", search)
+        self._log("_process_jump_key search %s", search)
         sp = self._vim.eval(search)
 
-        self._log("_process_jump sp: %s", sp)
+        self._log("_process_jump_key sp: %s", sp)
         if (sp[0] + sp[1]) < 1:
-            self._log("_process_jump no match found")
+            self._log("_process_jump_key no match found")
             return key * 2
 
         # Advance the cursor past the match by one position
@@ -380,15 +385,27 @@ class DoubleTap(VimLog):
         return ''
 
     def _process_insert_key(self, key):
-        self._log("process_keys key: %s, keystack: %s", key, self._key_stack)
+        self._log("_process_insert_key key: %s, keystack: %s", key, self._key_stack)
 
         buf_data = self._buf_data()
         insert = self._config.insert.get(key, {})
 
-        self._log("process_keys k config: %s", insert)
+        self._log("_process_insert_key k config: %s", insert)
 
         his = not insert.get('string')
+
         if not self._is_double_tap(key, buf_data=buf_data, honor_in_string=his):
+            self._log("_process_insert_key walk off? %s : %s", his, self._last_insert)
+            # Do we want to walk off instead?
+            # If it's string like, see if we want to walk off or not.
+            if not his and self._last_insert and self._last_insert.get('string'):
+                self._log("_process_insert_key let's walk off %s", key)
+                self._last_insert['r'] = key
+                if self._walk_off():
+                    self._log("_process_insert_key walked off, reset the stack")
+                    self._key_stack = []
+                    return ''
+
             return key
 
         ks_len = len(self._key_stack)
@@ -400,19 +417,19 @@ class DoubleTap(VimLog):
         line = pos[0] - 1
         char = pos[1]
         buf = self._vim.current.buffer
-        self._log("process_keys, pos %s:%s", line, char)
+        self._log("_process_insert_key, pos %s:%s", line, char)
 
         buf_line = buf[line]
 
-        self._log("process_keys, orig line: '%s'", buf_line)
+        self._log("_process_insert_key, orig line: '%s'", buf_line)
 
         # split the line in half, cutting out the input chars, and rebuild it with our result.
         buf_line_l = buf_line[0: char - ks_len + 1]
         buf_line_r = buf_line[char:]
         new_line = buf_line_l + insert['insert'] + buf_line_r
 
-        self._log("process_keys, new line: '%s'", new_line)
-        self._log("process_keys, new pos: %s:%s", pos[0], char - int(insert.get('bs', 0)))
+        self._log("_process_insert_key, new line: '%s'", new_line)
+        self._log("_process_insert_key, new pos: %s:%s", pos[0], char - int(insert.get('bs', 0)))
         buf[line] = new_line
 
         self._vim.current.window.cursor = (pos[0], char - int(insert.get('bs', 0)))
@@ -421,14 +438,7 @@ class DoubleTap(VimLog):
     @neovim.autocmd('BufEnter', pattern='*', eval='expand("%:p")', sync=True)
     def autocmd_handler_bufenter(self, filename):
         #  self._log("autocmd_handler_bufenter initializing %s ", filename)
-        #  self._log('autocmd_handler_bufenter initialize the insert maps')
-
         self._config.update_ft()
-
-        #  self._log('autocmd_handler_bufenter updated finishers %s', self._config.finishers)
-        #  self._log('autocmd_handler_bufenter updated inserters %s', self._config.insert)
-        #  self._log('autocmd_handler_bufenter updated timeout %s', self._config.timeout)
-
         im = self._config.insert
         right_serts = []
 
