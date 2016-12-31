@@ -17,3 +17,8 @@ Then update your plugins from within Neovim:
 ```vim
 :PlugUpdate
 ```
+
+Insert a pair and then be in the middle
+('stuff goes here, now jump out!')
+
+![](img/test0.gif)
