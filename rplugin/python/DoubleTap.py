@@ -223,6 +223,8 @@ class DoubleTap(VimLog):
         line = pos[0] - 1
         char = pos[1]
 
+        buf_char = buf[line] and buf[line][char - 1] or ''
+
         return {
             'window': window,
             'buffer': buf,
@@ -230,7 +232,7 @@ class DoubleTap(VimLog):
             'line': line,
             'char': char,
             'buf_line': buf[line],
-            'buf_char': buf[line][char - 1],
+            'buf_char': buf_char,
         }
 
     def _cut_back(self, r, inline=False, set_pos=False, buf_data=None):
