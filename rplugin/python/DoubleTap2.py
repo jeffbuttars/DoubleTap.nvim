@@ -67,6 +67,9 @@ JUMP_MAP = {
     #  "`": {'string': True},
 }
 
+# TODO(jeff) Always walk off a matching right sert character if this True
+PERMISCUOUS_WALK_OFF = False
+
 
 def dt_imap(func, key):
     # build the imap string for a function and key
@@ -366,6 +369,12 @@ class DoubleTap(VimLog):
 
         line = self._cut_back(1, set_pos=True, inline=True, buf_data=buf_data)
         self._log("_process_jump_key line after cut: %s : %s : %s", buf_data['pos'], buf_data['buf_char'], line)
+
+        # because of how searchpos works we need to back the cursor up by one so we'll match the
+        # char if we're on it.
+        buf_data = self._buf_data()
+        pos = buf_data['pos']
+        buf_data['window'].cursor = (pos[0], pos[1] - 1)
 
         # Let Neovim do most of the work here. This will do the search and
         # jump for us. We will need to advance the cursor by one if a match is made.
