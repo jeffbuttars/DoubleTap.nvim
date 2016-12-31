@@ -1,7 +1,7 @@
 
 .DEFAULT: all
 .PHONY: all install
-PFILE := DoubleTap2.py
+PFILE := DoubleTap.py
 
 export XDG_CONFIG_HOME ?= $(HOME)/.config
 export NVIM_HOME := $(XDG_CONFIG_HOME)/nvim

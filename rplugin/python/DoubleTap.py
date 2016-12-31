@@ -1,552 +1,517 @@
+import os
 import neovim
 import time
-
 import logging
+
+"""Version 2 of the Neovim DoubleTap plugin
+"""
+
+# Get some config from the env
+NEOVIM_DOUBLETAP_LOG_LEVEL = os.environ.get('NEOVIM_DOUBLETAP_LOG_LEVEL', 'INFO')
+NEOVIM_DOUBLETAP_LOG_FILE = os.environ.get('NEOVIM_DOUBLETAP_LOG_FILE')
 
 # Set up the logger
 mod_logger = logging.getLogger(__name__)
-# Use a console handler, set it to debug by default
-logger_ch = logging.StreamHandler()
-mod_logger.setLevel(logging.DEBUG)
-#  log_formatter = logging.Formatter(('%(levelname)s: %(asctime)s %(processName)s:%(process)d'
-#                                     ' %(filename)s:%(lineno)s %(module)s::%(funcName)s()'
-#                                     ' -- %(message)s'))
-#  logger_ch.setFormatter(log_formatter)
-mod_logger.addHandler(logger_ch)
+mod_logger.setLevel(getattr(logging, NEOVIM_DOUBLETAP_LOG_LEVEL, 'INFO'))
 
-LOGGER_DEBUG_FILE = '/tmp/doubletap_debug.log'
-logger_fd = logging.FileHandler(LOGGER_DEBUG_FILE)
-mod_logger.addHandler(logger_fd)
+if NEOVIM_DOUBLETAP_LOG_FILE:
+    # Use a console handler if NEOVIM_DOUBLETAP_LOG_FILE is '-'
+    if NEOVIM_DOUBLETAP_LOG_FILE == '-':
+        logger_ch = logging.StreamHandler()
+        mod_logger.addHandler(logger_ch)
+    else:
+        logger_fd = logging.FileHandler(NEOVIM_DOUBLETAP_LOG_FILE)
+        mod_logger.addHandler(logger_fd)
 
-
-insert_map = {
-        "(": {"l": "(", "r": ")"},
-        '"': {"l": '"', "r": '"'},
-        "'": {'l': "'", 'r': "'"},
-        "`": {'l': "`", 'r': "`"},
-        "{": {'l': "{", 'r': "}",
-              'mode': 'triggered', 'filler': ['', '']
-              },
-        "[": {'l': "[", 'r': "]"},
-        "<": {'l': "<", 'r': ">"},
-        }
-
-jump_map = {
-        ")": {"l": "(", "r": ")"},
-        "}": {'l': "{", 'r': "}"},
-        "]": {'l': "[", 'r': "]"},
-        ">": {'l': "<", 'r': ">"},
-        '"': {"l": '"', "r": '"'},
-        "'": {'l': "'", 'r': "'"},
-        }
-
-
-finishers_map = (';', ',')
+SYN_STRINGS = [
+    'string', 'quotes', 'heredoc', 'doctestvalue',
+    'doctest', 'doctest2', 'bytesescape',
+]
 
 # future configurable, in MS
 # configurable per map will be available
 DEFAULT_KEY_TIMEOUT = 750
+INSERT_IN_STRING = 0
 
-# Future configurable input modes for insert
-# configurable per map will be available
-# Generally, stream mode is good for single line inserts and
-# triggered is good for multiline inserts, ie: {}
-INPUT_MODES = ('stream', 'triggered')
-INPUT_MODE = INPUT_MODES[1]
+"""
+Default insert map for all file types
+"""
+INSERT_MAP = {
+    "(": {'insert': '()', 'r': ')'},
+    "[": {'insert': '[]', 'r': ']'},
+    "{": {'insert': '{}', 'r': '}'},
+    "<": {'insert': '<>', 'r': '>'},
+    "'": {'insert': "''", 'string': True},
+    '"': {'insert': '""', 'string': True},
+    "`": {'insert': "``", 'string': True},
+}
+
+"""
+Default finishers map for all file types
+"""
+FINISHERS_MAP = {
+    ';': ';',
+    ',': ',',
+}
+
+"""
+Default jump map values
+"""
+JUMP_MAP = {
+    ")": {'r': ')'},
+    "]": {'r': ']'},
+    "}": {'r': '}'},
+    ">": {'r': '>'},
+    #  "'": {'string': True},
+    #  '"': {'string': True},
+    #  "`": {'string': True},
+}
+
+# TODO(jeff) Always walk off a matching right sert character if this True
+PERMISCUOUS_WALK_OFF = False
 
 
-class KeyInputHandler(object):
+def dt_imap(func, key):
+    # build the imap string for a function and key
+    if key == "'":
+        imap = "imap <silent> %s <C-R>=%s(\"%s\")<CR>" % (key, func, key)
+    else:
+        imap = "imap <silent> %s <C-R>=%s('%s')<CR>" % (key, func, key)
 
-    STRING_PATTERNS = {
-        'generic': ('string', 'quote'),
-        'single': ('StringS', 'shQuote'),
-        'double': ('shDoubleQuote',)
-    }
+    mod_logger.debug('creating imap: %s', imap)
+    return imap
 
-    def __init__(self, vim, key, key_conf, key_timeout=None, logger=None):
-        self._logger = logger or mod_logger
-        self._key = key
-        self._key_conf = key_conf
+
+def dt_nmap(func, key):
+    # build the nmap string for a function and key
+    if key == "'":
+        nmap = "nmap <silent> %s <ESC>:call %s(\"%s\")<CR>" % (key, func, key)
+    else:
+        nmap = "nmap <silent> %s <ESC>:call %s('%s')<CR>" % (key, func, key)
+
+    mod_logger.debug('creating nmap: %s', nmap)
+    return nmap
+
+class VimLog(object):
+    def __init__(self, vim):
+        self._logger = mod_logger
         self._vim = vim
-
-        self._last_key_time = 0
-        self._key_timeout = key_timeout or DEFAULT_KEY_TIMEOUT
-        self._matching = False
-
-        self._log("KeyInputHandler init: %s %s, timer: %s",
-                  key, key_conf, self._key_timeout)
-
-        self.event_proc = self.stream
-
-    def __str__(self):
-        return "KeyInputHandler key: %s, key_conf: %s" % (self._key, self._key_conf)
 
     def _log(self, *args, **kwargs):
         self._logger.debug(*args, **kwargs)
+
+
+class DTConfig(VimLog):
+    def __init__(self, vim):
+        super(DTConfig, self).__init__(vim)
+        #  self._log("DTConfig::__init__")
+
+        self.dt_globals = {
+            'finishers': FINISHERS_MAP.copy(),
+            'insert': INSERT_MAP.copy(),
+            'jump': JUMP_MAP.copy(),
+            'timeout': DEFAULT_KEY_TIMEOUT,
+            'insert_in_string': INSERT_IN_STRING,
+        }
+
+        self.dt_ft = {}
+
+    def __getattr__(self, name):
+        #  self._log("DTConfig::__getattr__ %s", name)
+        if name in self.dt_globals:
+            #  self._log("DTConfig::__getattr__ vim var %s : %s",
+                      #  name,
+                      #  self.dt_ft.get(self.filetype(), {}).get(name, self.dt_globals.get(name)))
+            return self.dt_ft.get(self.filetype(), {}).get(name, self.dt_globals.get(name))
+
+        return self.__getattribute__(name)
+
+    def filetype(self):
+        return self._vim.eval('&filetype')
+
+    def lookup_var(self, vname, defl=None):
+        # Lookup a Vim variable from the current instance. Provides
+        # the defl value if the variable doesn't exist.
+        if self._vim.eval('exists("%s")' % vname):
+            return self._vim.eval("%s" % vname)
+
+        return defl
+
+    def ft_var(self, vname, defl=None):
+        # Lookup variables at the filetype scope, fallback to global scope if ft scope
+        # value is not found, otherwise return defl or None
+        ft = self.filetype()
+        return self.dt_var('%s_%s' % (ft, vname), defl=self.dt_var(vname, defl=defl))
+
+    def dt_var(self, vname, defl=None):
+        # Lookup variables at the g:doubletap global scope
+        # if value is not found return defl or None
+        return self.lookup_var('g:doubletap_%s' % vname, defl=defl)
+
+    def update_ft(self):
+        ft = self.filetype()
+        self._log('update_ft %s', ft)
+
+        if self.dt_ft.get(ft):
+            self._log('update_ft %s cache exists', ft)
+            return
+
+        self._log('update_ft %s building cache ...', ft)
+        cache = {}
+        for k, v in self.dt_globals.items():
+            self._log('update_ft %s building cache %s : %s', ft, k, v)
+            if type(v) is dict:
+                cache[k] = v.copy()
+                cv = self.ft_var(k, cache[k])
+                cache[k].update(cv)
+            else:
+                cache[k] = self.ft_var(k, v)
+
+            self.dt_ft[ft] = cache
+            self._log('update_ft %s built cache value %s : %s', ft, k, self.dt_ft[ft])
+
+
+@neovim.plugin
+class DoubleTap(VimLog):
+
+    def __init__(self, vim):
+        super(DoubleTap, self).__init__(vim)
+        self._log("DoubleTap::__init__")
+        self._key_stack = []
+        self._last_insert = None
+        self._config = DTConfig(vim)
 
     @property
     def mode(self):
         return self._vim.eval('mode()').lower()
 
-    def _patch_line(self, line, pos, mode=None):
-        """Returns a new line without the unwanted input character
-        as the result of a double tap.
-        """
+    def in_string(self, pos=None):
+        try:
+            line = pos and pos[0] or 'line(".")'
+            col = pos and pos[1] or 'col(".")'
+        except IndexError as e:
+            self._log.error(e)
+            line = 'line(".")'
+            col = 'col(".")'
 
-        self._log("TapOut original line: '%s', pos: %s", line, pos)
+        syn = self._vim.eval(
+            'synIDattr(synID(%s, %s, 1), "name")' % (line, col)
+        ).lower()
 
-        self._log("KeyInputHandler patch o-line: '%s', pos: %s, mode: %s",
-                  line, pos, mode)
+        self._log('in_string syn: "%s"', syn)
 
-        if mode:
-            m = self.mode
-            if mode != m:
-                self._log("KeyInputHandler mode mismatch %s:%s", mode, m)
-                return line
+        if syn:
+            for symbol in SYN_STRINGS:
+                if symbol in syn:
+                    return True
 
-            if mode == 'i':
-                self._vim.current.window.cursor = (pos[0], max(0, pos[1] - 1))
+        return False
 
-        col = pos[1]
-        if len(line) >= col:
-            line = line[:(col - 1)] + line[col:]
+    def _cur_char(self, buf_data=None):
+        pos = self._vim.current.window.cursor
+        line = pos[0] - 1
+        char = pos[1]
+        try:
+            return self._vim.current.buffer[line][char]
+        except IndexError:
+            return ''
 
-        self._log("KeyInputHandler patched line: '%s'", line)
-        return line
-
-    def _in_str(self, char, pos=None):
-        """
-        Param: thechar the quote character that's been double tapped.
-        See if the cursor is inside a string according the current syntax definition
-
-        This will often contain whether we are in a single or double quote
-        string. How that is represented seems syntax specific, not standard.
-        We still leverage that knowledge if we can.
-
-        If the mode is not 'i', then None is always returned
-
-        returns the string character of the string we're in or None
-        """
-
-        if self.mode != 'i':
-            return None
-
-        synstr = self._vim.eval('synIDattr(synID(line("."), col("."), 0), "name" )')
-        self._log("synstr %s", synstr)
-
-        in_string = any([x in synstr.lower() for x in self.STRING_PATTERNS['generic']])
-        self._log("In string %s", in_string)
-
-        if not in_string:
-            return None
-
-        self._log("char: '%s' POS %s %s" % (
-            char, self._vim.eval("line('.')"), self._vim.eval("col('.')")))
-
-        # We're in a string syntacticly, if the current input char is not a string char,
-        # return affirmative
-        if char not in ('"', "'"):
-            self._log("char, '%s', not a string char, returning the char", char)
-            return char
-
-        # Now we just have to handle the nested string condition
-        # TODO(jeff) make this configurable.
-
+    def _buf_data(self):
+        window = self._vim.current.window
         pos = self._vim.current.window.cursor
         buf = self._vim.current.buffer
-        line = buf[pos[0] - 1]
-        pos_char = line[pos[1] - 1]
+        line = pos[0] - 1
+        char = pos[1]
 
-        # check for a boundry condition here. If the character we're on is a string but
-        # it's not the same kind that was just tapped, return None
-        # If they are the same, return the char
-        self._log("Boundary pos: '%s', char: '%s'", pos_char, char)
-        if pos_char in ('"', "'"):
-            if pos_char == char:
-                return None
-            # This 'should' be handled as a jump out if jump out is enabled.
-            return char
+        return {
+            'window': window,
+            'buffer': buf,
+            'pos': pos,
+            'line': line,
+            'char': char,
+            'buf_line': buf[line],
+            'buf_char': buf[line][char - 1],
+        }
 
-        # Now we figure out if we're in a different kind of string then what is the current
-        # inputed string type
-        q = []
-        self._log('searchpos("%s", "Wn")' % "'")
-        ss = self._vim.eval('searchpos("%s", "Wn")' % "'")
-        self._log("next ss %s", ss)
+    def _cut_back(self, r, inline=False, set_pos=False, buf_data=None):
+        # Return the current line 'cut back' r characters from the current cursor pos
+        # Set the current line value to new line if inline is True
+        buf_data = buf_data or self._buf_data()
+        char = buf_data['char']
+        line = buf_data['line']
+        buf_line = buf_data['buf_line']
+        #  self._log("_cut_back orign '%s'", buf_line)
 
-        if ss and any(ss):
-            q.append(ss + ["\'"])
+        buf_line_l = buf_line[0: char - r]
+        buf_line_r = buf_line[char:]
+        new_line = buf_line_l + buf_line_r
+        #  self._log("_cut_back new '%s'", new_line)
 
-        self._log("searchpos('\"',  'Wn')")
-        ds = self._vim.eval("searchpos('\"',  'Wn')")
-        self._log("next ds %s", ds)
+        if inline:
+            buf_data['buffer'][line] = new_line
 
-        if ds and any(ds):
-            q.append(ds + ['\"'])
+        if set_pos:
+            self._vim.current.window.cursor = (line + 1, char - r)
 
-        if not q:
-            # Couldn't determine, just go with being in the string for now
-            return char
+        return new_line
 
-        ins = min(q)
-        self._log("In string, q: %s, ss: %s, ds: %s, %s", q, ss, ds, ins)
-        self._log("In string, ins : %s", ins)
+    def _is_double_tap(self, key, buf_data=None, honor_in_string=True):
+        self._log("_is_double_tap key: %s, honor: %s", key, honor_in_string)
 
-        # If we're in a string that is not the same kind as the one we're inputing,
-        # allow double tapping it.
-        line = buf[ins[0] - 1]
-        res = line[ins[1] - 1]
-        self._log("In String returning result: %s:%s, char:%s , res:%s",
-                  self._vim.eval("line('.')"), self._vim.eval("col('.')"), char, res)
+        # If we're in string, check if we allow double tap
+        if honor_in_string and self.in_string() and not self._config.insert_in_string:
+            self._log("_is_double_tap in string, ignoring key")
+            return None
 
-        return ((char == res) and char) or None
+        kdata = {
+            'key': key,
+            'when': int(time.time() * 1000)  # time since epoch in milliseconds
+        }
 
-    def stream(self, last_key):
+        if self._key_stack is None:
+            self._key_stack = [kdata]
+            self._log("_is_double_tap None stack %s", self._key_stack)
+            return None
 
-        key = self._key
+        self._key_stack.append(kdata)
 
-        if self._matching:
-            # We're being fed keys while processing a doubleTap event, so ignore them
-            self._log("stream already matching key: %s", key)
+        if len(self._key_stack) < 2:
+            self._log("_is_double_tap short stack")
+            return None
+
+        if key != self._key_stack[-2]['key']:
+            self._log("_is_double_tap stack un-matched stack")
+            self._key_stack = [kdata]
+            return None
+
+        stack_life = self._key_stack[-1]['when'] - self._key_stack[0]['when']
+        if stack_life > self._config.timeout:
+            self._log("_is_double_tap too old")
+            self._key_stack = [kdata]
+            return None
+
+        # enforce the last char in the buffer is the same as the double tap key
+        buf_data = buf_data or self._buf_data()
+        #  self._log("_is_double_tap buf_data %s", buf_data)
+        if self.mode == 'i' and key != buf_data['buf_char']:
+            self._log("_is_double_tap cur buf char %s does not match key", buf_data['buf_char'])
+            self._key_stack = []
+            return None
+
+        self._log("_is_double_tap good")
+        return kdata
+
+    def _process_finish_line_key(self, key, buf_data=None):
+        self._log("_process_finish_line_key %s", key)
+
+        buf_data = buf_data or self._buf_data()
+        if not self._is_double_tap(key, buf_data, honor_in_string=False):
             return key
 
-        # time since epoch in milliseconds
-        now = int(time.time() * 1000)
+        buf = buf_data['buffer']
+        ln = buf_data['line']
 
-        if self.mode == 'i':
-            # only take action if the existing characters match the key map.
-            # this is important as this plugin only registers a few characters in the
-            # autocommand map. So it's possible that additional keys lie between what
-            # we think are consecutive chars.
-            pos = self._vim.current.window.cursor
-            buf = self._vim.current.buffer
-            ln = pos[0] - 1
-            line = buf[ln]
-            lp = pos[1] - 1
-            #  if lp < 0:
-            #      lp = 0
+        line = self.mode == 'i' and self._cut_back(1, set_pos=True, buf_data=buf_data) or buf[ln]
+        line = line.rstrip()
+        fm = self._config.finishers
 
-            # The key we just got, plus the key on the page, must be the same before
-            # we continute.
-            # This prevents a fast typer from triggering on something like {a}
-            if line and self._key != line[lp]:
-                self._last_key_time = now
-                return key
-
-        # for the time being, we only handle simple pairs of keys, so pass
-        # on anything that doesn't match the last key.
-        if key == last_key and now - self._last_key_time < self._key_timeout:
-
-            if self._in_str(key):
-                return key
-
-            self._matching = True
-
-            # This is our 'critical section'
-            try:
-                res = self.stream_perform()
-            except Exception as e:
-                self._log("Exception!!!!: '%s' %s", res, e)
-            finally:
-                # reset our state, let the exception be handled further up
-                self._log("Exception finally, reset matching state")
-                self._matching = False
-                self._last_key_time = 0
-
-            self._matching = False
-            self._last_key_time = 0
-            self._log("stream perform result: '%s'", res)
-            return res
-
-        self._log("stream BOTTOM key: '%s'", key)
-        self._last_key_time = now
-
-        return key
-
-    def stream_perform(self):
-        """
-        This is where the 'critical section' work is performed.
-        Do the workin in `stream_perform()` that will change the buffer when a
-        doubleTap event has occurred.
-        Whatever `stream_perform` returns will be written in the current
-        buffer and the current position
-        """
-        raise NotImplementedError("stream_perform() must be overriden")
-
-
-class InsertHandler(KeyInputHandler):
-    def __init__(self, vim, key, key_conf, key_timeout=None, jumper=False):
-        super(InsertHandler, self).__init__(vim, key, key_conf, key_timeout=key_timeout)
-
-        self._jumper = jumper
-
-        # XXX(jeffbuttars) Big fat hack for now for the '"' case.
-        if key == '"':
-            imap = "imap <silent> %s <C-R>=DoubleTapInsert('%s')<CR>" % (key, key)
-        else:
-            imap = "imap <silent> %s <C-R>=DoubleTapInsert(\"%s\")<CR>" % (key, key)
-
-        self._log(imap)
-        self._vim.command(imap)
-
-    def __str__(self):
-        return "InsertHandler key: %s, key_conf: %s" % (self._key, self._key_conf)
-
-    def stream_perform(self):
-        pos = self._vim.current.window.cursor
-        self._log("double_tap_insert key: %s", self._key)
-        self._log("double_tap_insert : window pos %s", pos)
-
-        buf = self._vim.current.buffer
-        ln = pos[0] - 1
-        line = buf[ln]
-        lp = pos[1]
-        bl = line[:lp - 1]
-        el = line[lp:]
-        self._log("double_tap_insert : line %s", ln)
-        buf[ln] = bl + self._key_conf['r'] + el
-        self._vim.current.window.cursor = (pos[0], lp - 1)
-
-        return self._key_conf['l']
-
-
-class FinishLineHandler(KeyInputHandler):
-    def __init__(self, vim, key, key_conf, key_timeout=None):
-        super(FinishLineHandler, self).__init__(
-                vim, key, key_conf, key_timeout=key_timeout)
-
-        imap = "imap <silent> %s <C-R>=DoubleTapFinishLine('%s')<CR>" % (key, key)
-        self._log(imap)
-        self._vim.command(imap)
-
-        imap = "nmap <silent> %s <ESC>:call DoubleTapFinishLineNormal('%s')<CR>" % (key, key)
-        self._log(imap)
-        self._vim.command(imap)
-
-    def __str__(self):
-        return "FinishLineHandler key: %s, key_conf: %s" % (self._key, self._key_conf)
-
-    def stream_perform(self):
-        pos = self._vim.current.window.cursor
-
-        self._log("double_finish_line key: %s", self._key)
-        self._log("double_finish_line : window pos %s", pos)
-
-        buf = self._vim.current.buffer
-        ln = pos[0] - 1
-        c = pos[1]
-
-        self._log("double_finish_line : cur line '%s' %s", buf[ln], len(buf[ln]))
-        if buf[ln]:
-            self._log("double_finish_line : cur char '%s'", buf[ln][c - 1])
-
-        line = buf[ln].rstrip()
-
-        if line and (line[-1] != self._key):
-            line += self._key
-        elif not line:
-            line = self._key
-
-        line = self._patch_line(line, pos, mode='i')
+        if fm[key] and line[-1] != fm[key]:
+            line += fm.get(key, '')
 
         buf[ln] = line
-
-        self._log("double_finish_line : new line '%s' %s", line, len(line))
-        self._log("double_finish_line : column %s", c)
-
-        #  if mode == 'i':
-        #      self._vim.current.window.cursor = (pos[0], max(0, pos[1] - 1))
-
         return ''
 
+    def _walk_off(self):
+        self._log("_walk_off last %s, cur char: %s", self._last_insert, self._cur_char())
+        # this is first time we've encountered this key press since the last time we inserted.
+        # See if we should 'walk off' of a matching pair
+        # if this matches the right char of the last pair insertion, 'walk off'
 
-class TapOutHandler(KeyInputHandler):
-    def __init__(self, vim, key, key_conf, key_timeout=None, inserter=False):
-        super(TapOutHandler, self).__init__(
-                vim, key, key_conf, key_timeout=key_timeout)
-
-        self._inserter = inserter
-        self._lkey = key_conf.get('l')
-        self._rkey = key_conf.get('r')
-        #  self._is_sym = key_conf.get('sym', False)
-
-        # Don't maper inserters, it's up to the inerstion code to figure
-        # out if it's an insert or tapout.
-
-        if not self._inserter:
-            if key == '"':
-                imap = "imap <silent> %s <C-R>=DoubleTapOut('%s')<CR>" % (
-                        self._key, self._key)
-            else:
-                imap = "imap <silent> %s <C-R>=DoubleTapOut(\"%s\")<CR>" % (
-                        self._key, self._key)
-
-            self._log(imap)
-            self._vim.command(imap)
-
-    def __str__(self):
-        return "TapOutHandler key: %s, key_conf: %s" % (self._key, self._key_conf)
-
-    def stream_perform(self):
-        pos = self._vim.current.window.cursor
-        buf = self._vim.current.buffer
-        ln = pos[0] - 1
-        line = buf[ln]
-
-        line = self._patch_line(line, pos, mode='i')
-
-        # If we're sigging on the left char of the match, move over one
-        # We have be carefull about the first and last chars
-        c = max(0, min(pos[1] - 1, len(line) - 1))
-
-        self._log("checking line: '%s', c: %s, len: %s ", line, c, len(line))
-
-        if line[c] == self._lkey:
-            self._vim.current.window.cursor = (pos[0], (pos[1] + 1))
+        if self._last_insert and self._last_insert.get('r') == self._cur_char():
+            self._log("_walk_off It's a walk off!")
+            # "It's a walk off!"
             pos = self._vim.current.window.cursor
+            line = pos[0]
+            char = pos[1]
+            self._vim.current.window.cursor = (line, char + 1)
+            return True
 
-        buf[ln] = line
-        c = max(0, min(pos[1] - 1, len(line) - 1))
-        self._log("checking line: '%s', c: %s, len: %s ", line, c, len(line))
+        self._log("_walk_off _not_ a walk off")
+        return False
 
-        # If we're sitting on the char, just move over one!
-        if line[c] == self._rkey:
-            self._vim.current.window.cursor = (pos[0], (pos[1] + 1))
-            return ""
+    def _process_rightsert_key(self, key):
+        self._log("_process_rightsert_key %s : %s", key, self._key_stack)
+        # Decide how to use this key, as a walk off or a possible jump.
 
-        # Vim has some built funcs to help us with this. If we're in a matching
-        # pair, witch is likely, it will do the jump for us!
-        lk = self._lkey
-        rk = self._rkey
+        # If the stack is empty or the last key is not the same as the current,
+        # process a possible walk off.
+        if not self._key_stack or self._key_stack[-1]['key'] != key:
+            self._key_stack = []
+            if self._walk_off():
+                return ''
 
-        if lk == "'":
-            lk = '\''
-            rk = '\''
+        # It's not a walk off
+        # Could still be a jump out
+        return self._process_jump_key(key)
 
-        sres = int(self._vim.eval("searchpair('%s', '', '%s', 'W')" % (lk, rk)))
-        if sres > 0:
-            self._log("TapOut patched Vim jump! %s", sres)
-            # We jumped.
-            #  call s:advCursorAndMatch( 1, [ [ l:cpos[1], l:cpos[2]-1 ] ] )
-            pos = self._vim.current.window.cursor
-            self._vim.current.window.cursor = (pos[0], (pos[1] + 1))
-            return ""
+    def _process_jump_key(self, key):
+        self._log("_process_jump_key %s", self._key_stack)
 
-        return self._key
-
-
-@neovim.plugin
-class DoubleTap(object):
-    """Docstring for DoubleTap """
-
-    def __init__(self, vim):
-        self._logger = mod_logger
-
-        self._log("DoubleTap::__init__")
-
-        self._vim = vim
-        self._last_key = ''
-
-        self._insert_key_handlers = {}
-        self._finish_key_handlers = {}
-        self._jump_key_handlers = {}
-
-        self._insert_timer = 0
-        #  self._insert_timer = int(self.lookup_var("g:DoubleTapInsertTimer", DEFAULT_KEY_TIMEOUT))
-
-        self._insert_timer = self._insert_timer or DEFAULT_KEY_TIMEOUT
-        self._log("Instatiating... timer %s", self._insert_timer)
-
-    def _log(self, *args, **kwargs):
-        self._logger.debug(*args, **kwargs)
-
-    def lookup_var(self, vname, *args):
-        defa = None
-        if args:
-            defa = args[0]
-
-        exists = self._vim.eval('exists("%s")' % vname)
-        if exists:
-            return self._vim.eval("%s" % vname)
-
-        return defa
-
-    @neovim.autocmd('BufEnter', pattern='*', eval='expand("<afile>")', sync=True)
-    def autocmd_handler(self, filename):
-        #  self._vim.command("echo 'garbage!!! %s'" % filename)
-
-        for k, v in insert_map.items():
-            self._insert_key_handlers[k] = InsertHandler(
-                    self._vim, k, v,
-                    key_timeout=self._insert_timer, jumper=(k in jump_map))
-            self._log("autocmd_handler initializing %s : %s ", k, v)
-
-        for f in finishers_map:
-            self._finish_key_handlers[f] = FinishLineHandler(
-                    self._vim, f, {},
-                    key_timeout=self._insert_timer)
-
-        for k, v in jump_map.items():
-            self._jump_key_handlers[k] = TapOutHandler(
-                    self._vim, k, v,
-                    key_timeout=self._insert_timer, inserter=(k in insert_map))
-
-    def dispatch(self, args, handlers):
-        """
-        Handle the key input of the mapped trigger keys.
-        The event is dispatched to the proper handler which is passed in.
-
-        There are two input modes, stream and triggerd.
-
-        In stream mode the keys are inserted as they're typed. If a double tap event
-        occurs, then the line is retroactively edited to reflect the pair input.
-
-        In triggerd mode, when the first trigger input is received, it's buffered until it's
-        determined that a double tap event won't happen, or of course the double tap event
-        occurs. When the state is resolved, the insert will happen.
-        """
-        try:
-            key = args[0]
-        except KeyError:
-            # Ignore and carry on. This would be a very strange scenario
-            return
-
-        self._log("dispatch args: %s, key: '%s' last_key: '%s' ",
-                  args, key, self._last_key)
-        res = key
-
-        handler = handlers.get(key)
-        self._log("dispatch key: %s handler: %s ", key, handler)
-
-        if not handler:
-            self._last_key = key
+        buf_data = self._buf_data()
+        if not self._is_double_tap(key, buf_data=buf_data, honor_in_string=False):
             return key
 
-        # Need mister pokemon here to go away
-        res = key
-        try:
-            res = handler.event_proc(self._last_key)
-        except Exception:
-            import traceback
-            self._log("EXECPTION\n%s", traceback.format_exc())
+        kconf = self._config.jump[key]
+        self._log("_process_jump_key config %s : %s", key, kconf)
 
-        self._log("dispatch key: %s result: '%s' ", key, res)
+        # This is a bit funny, we have to cut the line before we do the search.
+        # If the search fails, put the characters back!
 
-        self._last_key = key
-        return res
+        line = self._cut_back(1, set_pos=True, inline=True, buf_data=buf_data)
+        self._log("_process_jump_key line after cut: %s : %s : %s",
+                  buf_data['pos'], buf_data['buf_char'], line)
+
+        # because of how searchpos works we need to back the cursor up by one so we'll match the
+        # char if we're on it.
+        buf_data = self._buf_data()
+        pos = buf_data['pos']
+        buf_data['window'].cursor = (pos[0], pos[1] - 1)
+
+        # Let Neovim do most of the work here. This will do the search and
+        # jump for us. We will need to advance the cursor by one if a match is made.
+        search = 'searchpos("%s", "Wze")' % (kconf.get('r', ''))
+        self._log("_process_jump_key search %s", search)
+        sp = self._vim.eval(search)
+
+        self._log("_process_jump_key sp: %s", sp)
+        if (sp[0] + sp[1]) < 1:
+            self._log("_process_jump_key no match found")
+            return key * 2
+
+        # Advance the cursor past the match by one position
+        buf_data = self._buf_data()
+        pos = buf_data['pos']
+        buf_data['window'].cursor = (pos[0], pos[1] + 1)
+        return ''
+
+    def _process_insert_key(self, key):
+        self._log("_process_insert_key key: %s, keystack: %s", key, self._key_stack)
+
+        buf_data = self._buf_data()
+        insert = self._config.insert.get(key, {})
+
+        self._log("_process_insert_key k config: %s", insert)
+
+        his = not insert.get('string')
+
+        if not self._is_double_tap(key, buf_data=buf_data, honor_in_string=his):
+            self._log("_process_insert_key walk off? %s : %s", his, self._last_insert)
+            # Do we want to walk off instead?
+            # If it's string like, see if we want to walk off or not.
+            if not his and self._last_insert and self._last_insert.get('string'):
+                self._log("_process_insert_key let's walk off %s", key)
+                self._last_insert['r'] = key
+                if self._walk_off():
+                    self._log("_process_insert_key walked off, reset the stack")
+                    self._key_stack = []
+                    return ''
+
+            return key
+
+        ks_len = len(self._key_stack)
+        self._key_stack = None
+        self._last_insert = insert
+
+        # erase previous keys, insert our characters and reposition the cursor.
+        pos = self._vim.current.window.cursor
+        line = pos[0] - 1
+        char = pos[1]
+        buf = self._vim.current.buffer
+        self._log("_process_insert_key, pos %s:%s", line, char)
+
+        buf_line = buf[line]
+
+        self._log("_process_insert_key, orig line: '%s'", buf_line)
+
+        # split the line in half, cutting out the input chars, and rebuild it with our result.
+        buf_line_l = buf_line[0: char - ks_len + 1]
+        buf_line_r = buf_line[char:]
+        new_line = buf_line_l + insert['insert'] + buf_line_r
+
+        self._log("_process_insert_key, new line: '%s'", new_line)
+        self._log("_process_insert_key, new pos: %s:%s", pos[0], char - int(insert.get('bs', 0)))
+        buf[line] = new_line
+
+        self._vim.current.window.cursor = (pos[0], char - int(insert.get('bs', 0)))
+        return ''
+
+    @neovim.autocmd('BufEnter', pattern='*', eval='expand("%:p")', sync=True)
+    def autocmd_handler_bufenter(self, filename):
+        #  self._log("autocmd_handler_bufenter initializing %s ", filename)
+        self._config.update_ft()
+        im = self._config.insert
+        right_serts = []
+
+        for k, v in im.items():
+            if v.get('disabled'):
+                continue
+
+            imap = dt_imap('DoubleTapInsert', k)
+            #  self._log('initialize the insert map "%s"', imap)
+            self._vim.command(imap)
+
+            if im[k].get('r') and k != im[k]['r']:
+                imap = dt_imap('DoubleTapRightsert', im[k]['r'])
+                right_serts.append(im[k]['r'])
+                self._log('initialize the rightsert map "%s"', imap)
+                self._vim.command(imap)
+
+        for k, v in self._config.finishers.items():
+            if v == 'disabled':
+                continue
+
+            imap = dt_imap('DoubleTapFinishLine', k)
+            #  self._log('initialize the insert map "%s"', imap)
+            self._vim.command(imap)
+
+            nmap = dt_nmap('DoubleTapFinishLine', k)
+            #  self._log('initialize the normal map "%s"', nmap)
+            self._vim.command(nmap)
+
+        for k, v in self._config.jump.items():
+            if v == 'disabled' or k in right_serts:
+                continue
+
+            imap = dt_imap('DoubleTapRightsert', k)
+            self._log('initialize the jump map "%s"', imap)
+            self._vim.command(imap)
 
     @neovim.function('DoubleTapInsert', sync=True)
     def double_tap_insert(self, args):
-        return self.dispatch(args, self._insert_key_handlers)
+        try:
+            key = args[0]
+        except IndexError:
+            return ''
 
-    @neovim.function('DoubleTapOut', sync=True)
-    def double_tap_out(self, args):
-        return self.dispatch(args, self._jump_key_handlers)
+        self._log("double_tap_insert %s ", key)
+        return self._process_insert_key(key)
+
+    @neovim.function('DoubleTapRightsert', sync=True)
+    def double_tap_rightsert(self, args):
+        try:
+            key = args[0]
+        except IndexError:
+            return ''
+
+        self._log("double_tap_righsert %s ", key)
+        return self._process_rightsert_key(key)
 
     @neovim.function('DoubleTapFinishLine', sync=True)
     def double_tap_finish_line(self, args):
-        return self.dispatch(args, self._finish_key_handlers)
+        try:
+            key = args[0]
+        except IndexError:
+            return ''
 
-    @neovim.function('DoubleTapFinishLineNormal', sync=True)
-    def double_tap_finish_line_normal(self, args):
-        return self.dispatch(args, self._finish_key_handlers)
+        self._log("double_tap_finish_line %s ", key)
+        return self._process_finish_line_key(key)
