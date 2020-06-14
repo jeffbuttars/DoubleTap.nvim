@@ -98,7 +98,7 @@ class DoubleTap:
 
         # split the line in half, cutting out the input chars, and rebuild it with our result.
         #  buf_line_l = buf_line[0: char - ks_len + 1]
-        buf_line_l = buf_line[0: char - 3]
+        buf_line_l = buf_line[0: char - 1]
         buf_line_r = buf_line[char:]
         new_line = buf_line_l + insert['insert'] + buf_line_r
 
@@ -136,6 +136,8 @@ class DoubleTap:
             logger.debug("DoubleTap::insert no match or to late")
             return key
 
+        self.last_key = 0
+        self.last_key_time = 0
         return self._handle_insert(key)
         #  self._log("double_tap_insert %s ", key)
         #  return self._process_insert_key(key)
