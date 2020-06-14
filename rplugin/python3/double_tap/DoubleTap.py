@@ -92,6 +92,7 @@ def dt_nmap(func, key):
     mod_logger.debug('creating nmap: %s', nmap)
     return nmap
 
+
 class VimLog(object):
     def __init__(self, vim):
         self._logger = mod_logger
