@@ -48,6 +48,7 @@ JUMP_MAP = {
 @dataclass
 class DTConfig:
     inserts: dict = field(default_factory=INSERT_MAP.copy)
+    finishers: dict = field(default_factory=FINISHERS_MAP.copy)
     timeout: float = field(default=DEFAULT_KEY_TIMEOUT)
     #  def __post_init__(self):
     #      # Build defaults

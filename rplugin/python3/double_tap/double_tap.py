@@ -1,4 +1,5 @@
 import logging
+from functools import wraps
 import os
 import time
 from collections import deque
@@ -28,6 +29,22 @@ if NEOVIM_DOUBLETAP_LOG_FILE:
     else:
         logger_fd = logging.FileHandler(NEOVIM_DOUBLETAP_LOG_FILE)
         logger.addHandler(logger_fd)
+
+
+def normalize_key(func):
+    @wraps(func)
+    def wrapper(self, args):
+        try:
+            key = args[0]
+        except IndexError:
+            return ""
+
+        if not self._is_double_tap( key):
+            return key
+
+        return func(self, key)
+
+    return wrapper
 
 
 def dt_imap(func, key):
@@ -72,6 +89,18 @@ class DoubleTap:
     def mode(self):
         return self._vim.eval("mode()").lower()
 
+    def _is_double_tap(self, key):
+        now = time.perf_counter()
+        if (key != self.last_key) or ((now - self.last_key_time) > self.config.timeout):
+            self.last_key = key
+            self.last_key_time = now
+            #  logger.debug("DoubleTap::_is_double_tap no match or to late")
+            return False
+
+        self.last_key = 0
+        self.last_key_time = 0
+        return True
+
     @pynvim.autocmd("BufEnter", pattern="*", eval='expand("%:p")', sync=True)
     def on_bufenter(self, filename):
         logger.debug("BufEnter: %s ", filename)
@@ -87,9 +116,14 @@ class DoubleTap:
             logger.debug('initialize the insert map "%s"', imap)
             self.nvim.command(imap)
 
-    def _splice(self, key):
-        insert = self.config.inserts[key]
+        for k, v in self.config.finishers.items():
+            imap = dt_imap('DoubleTapFinishLine', k)
+            self.nvim.command(imap)
 
+            nmap = dt_nmap('DoubleTapFinishLine', k)
+            self.nvim.command(nmap)
+
+    def _splice(self, key):
         # erase previous keys, insert our characters and reposition the cursor.
         pos = self.window.cursor
         line = pos[0] - 1
@@ -100,7 +134,7 @@ class DoubleTap:
         #  buf_line_l = buf_line[0: char - ks_len + 1]
         buf_line_l = buf_line[0: char - 1]
         buf_line_r = buf_line[char:]
-        new_line = buf_line_l + insert['insert'] + buf_line_r
+        new_line = buf_line_l + key + buf_line_r
 
         # Write the edited line into the buffer
         self.buffer[line] = new_line
@@ -108,36 +142,33 @@ class DoubleTap:
         # Re-position the cursor to be inside the pair
         self.nvim.current.window.cursor = (pos[0], char - int(insert.get('bs', 0)))
 
-    def _handle_insert(self, key):
-        logger.debug("handle_insert %s", key)
-        # get the configuration for the key
-        #  k_cfg = self.config.inserts[key]
+    @pynvim.function("DoubleTapInsert", sync=True)
+    @normalize_key
+    def insert(self, key):
+        logger.debug("DoubleTap::insert %s", key)
 
-        #  if not self.key_stack:
-        #      self.key_stack.append(key)
-
-        self._splice(key)
+        r_key = self.config.inserts[key]['insert']
+        self._splice(r_key)
 
         return ''
 
-    @pynvim.function("DoubleTapInsert", sync=True)
-    def insert(self, args):
-        logger.debug("DoubleTap::insert %s", args)
 
-        try:
-            key = args[0]
-        except IndexError:
-            return ""
+    @pynvim.function("DoubleTapFinishLine", sync=True)
+    @normalize_key
+    def finish_line(self, key):
+        logger.debug("DoubleTap::finish_line %s", key)
+        pos = self.window.cursor
+        buf = self.buffer
 
-        now = time.perf_counter()
-        if (key != self.last_key) or ((now - self.last_key_time) > self.config.timeout):
-            self.last_key = key
-            self.last_key_time = now
-            logger.debug("DoubleTap::insert no match or to late")
-            return key
+        ln = pos[0] - 1
+        char = pos[1]
 
-        self.last_key = 0
-        self.last_key_time = 0
-        return self._handle_insert(key)
-        #  self._log("double_tap_insert %s ", key)
-        #  return self._process_insert_key(key)
+        #  line = self.mode == 'i' and self._cut_back(1, set_pos=True, buf_data=buf_data) or self.buffer[ln]
+        line = self.buffer[ln].rstrip()
+
+        if line[-1] != key:
+            line += self.config.finishers[key]
+
+        self.buffer[ln] = line
+
+        return ''
