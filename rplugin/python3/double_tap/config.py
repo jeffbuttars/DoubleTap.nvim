@@ -12,6 +12,7 @@ SYN_STRINGS = (
 # configurable per map will be available
 DEFAULT_KEY_TIMEOUT = 0.750
 INSERT_IN_STRING = 0
+DEFAULT_SEARCH_TIMEOUT = 500
 
 """
 Default insert map for all file types
@@ -42,6 +43,9 @@ JUMP_MAP = {
     "]": {'r': ']'},
     "}": {'r': '}'},
     ">": {'r': '>'},
+    #  "'": {'string': True},
+    #  '"': {'string': True},
+    #  "`": {'string': True},
 }
 
 
@@ -49,7 +53,9 @@ JUMP_MAP = {
 class DTConfig:
     inserts: dict = field(default_factory=INSERT_MAP.copy)
     finishers: dict = field(default_factory=FINISHERS_MAP.copy)
+    jumps: dict = field(default_factory=JUMP_MAP.copy)
     timeout: float = field(default=DEFAULT_KEY_TIMEOUT)
+    search_timeout: int = field(default=DEFAULT_SEARCH_TIMEOUT)
     #  def __post_init__(self):
     #      # Build defaults
     #      self._insert_map = INSERT_MAP.copy()

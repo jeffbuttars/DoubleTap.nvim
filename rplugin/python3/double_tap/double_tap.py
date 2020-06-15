@@ -123,6 +123,13 @@ class DoubleTap:
             nmap = dt_nmap('DoubleTapFinishLine', k)
             self.nvim.command(nmap)
 
+        for k, v in self.config.jumps.items():
+            if v.get("disabled"):
+                continue
+
+            imap = dt_imap('DoubleTapJumpOut', k)
+            self.nvim.command(imap)
+
     def _splice(self, key):
         # erase previous keys, insert our characters and reposition the cursor.
         pos = self.window.cursor
@@ -140,7 +147,48 @@ class DoubleTap:
         self.buffer[line] = new_line
 
         # Re-position the cursor to be inside the pair
-        self.nvim.current.window.cursor = (pos[0], char - int(insert.get('bs', 0)))
+        #  self.nvim.current.window.cursor = (pos[0], char - int(insert.get('bs', 0)))
+        self.nvim.current.window.cursor = (pos[0], char)
+
+    @pynvim.function("DoubleTapJumpOut", sync=True)
+    @normalize_key
+    def jump_out(self, key):
+        logger.debug("DoubleTap::jump_out %s", key)
+
+        # because of how searchpos works we need to back the cursor up by one so we'll match the
+        # char if we're on it.
+        pos = self.window.cursor
+        orig_pos = pos[:]
+
+        # back the cursor up on position on it's current line
+        self.window.cursor = (pos[0], pos[1] - 1)
+
+        # Let Neovim do most of the work here. This will do the search and
+        # jump for us. We will need to advance the cursor by one if a match is made.
+        search = 'searchpos("%s", "Wze", "", %s)' % (
+            self.config.jumps[key]['r'],
+            self.config.search_timeout
+        )
+        #  logger.debug("_process_jump_key search %s", search)
+        sp = self.nvim.eval(search)
+
+        #  logger.debug("_process_jump_key sp: %s", sp)
+        if (sp[0] + sp[1]) == 1:
+            logger.debug("DoubleTap::jump_out no match found")
+            return key * 2
+
+        logger.debug("DoubleTap::jump_out match found")
+
+        # Advance the cursor past the match by one position
+        pos = self.window.cursor
+        # forward the cursor up on position on it's current line
+        self.window.cursor = (pos[0], pos[1] - 1)
+
+        # Cut out the first key that was inserted from the double tap
+        line = self.buffer[orig_pos[0] - 1]
+        self.buffer[orig_pos[0] - 1] = line[:orig_pos[1]-1] + line[orig_pos[1]:]
+
+        return ''
 
     @pynvim.function("DoubleTapInsert", sync=True)
     @normalize_key
