@@ -178,6 +178,7 @@ class DoubleTap(VimLog):
         super(DoubleTap, self).__init__(vim)
         self._log("DoubleTap::__init__")
         self._key_stack = []
+        self._last_mode = ''
         self._last_insert = None
         self._config = DTConfig(vim)
 
@@ -259,6 +260,16 @@ class DoubleTap(VimLog):
 
     def _is_double_tap(self, key, buf_data=None, honor_in_string=True):
         self._log("_is_double_tap key: %s, honor: %s", key, honor_in_string)
+
+        # If there was a mode change, we're done.
+        last_mode = this._last_mode
+        cur_mode = this.mode
+        this._last_mode = cur_mode
+        if cur_mode != last_mode:
+            self._log("_is_double_tap mode change, ignoring key, reseting key stack")
+            self._key_stack = []
+            return None
+
 
         # If we're in string, check if we allow double tap
         if honor_in_string and self.in_string() and not self._config.insert_in_string:
