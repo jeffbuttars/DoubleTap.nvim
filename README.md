@@ -2,7 +2,7 @@
 
 # **$${\color{red}ALPHA - HIGHLY EXPERIMENTAL}$$**
 
-$${\color{red}Red}$$
+$${\color{red}ALPHA - HIGHLY EXPERIMENTAL}$$
 
 DoubleTap plugin for Neovim - Easily insert and jump out of pairs
 
