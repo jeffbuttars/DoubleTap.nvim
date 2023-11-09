@@ -1,6 +1,7 @@
 local M = {}
 M.defaults = require("DoubleTap.defaults")
 
+
 M.setup_config = function(config)
 	if not (type(config) == "table") then
 		return

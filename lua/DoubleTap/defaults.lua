@@ -1,5 +1,5 @@
 local defaults = {
-	threshold = 0.4, -- In seconds
+	threshold = 0.35, -- In seconds
 	jump_out = {
 		{ key = ")" },
 		{ key = "}" },
