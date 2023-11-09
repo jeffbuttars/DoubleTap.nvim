@@ -1,10 +1,6 @@
 # DoubleTap.nvim
 
-<span style="color:red">
-
-# **ALPHA - HIGHLY EXPERIMENTAL**
-
-</span>
+# **$${\color{red}ALPHA - HIGHLY EXPERIMENTAL}$$**
 
 DoubleTap plugin for Neovim - Easily insert and jump out of pairs
 
