@@ -2,6 +2,8 @@
 
 # **$${\color{red}ALPHA - HIGHLY EXPERIMENTAL}$$**
 
+$${\color{red}Red}$$
+
 DoubleTap plugin for Neovim - Easily insert and jump out of pairs
 
 ## Install
