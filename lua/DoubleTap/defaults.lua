@@ -1,4 +1,5 @@
-local defaults = {
+-- Declare configuration defaults
+return {
 	threshold = 0.35, -- In seconds
 	jump_out = {
 		{ key = ")" },
@@ -31,5 +32,3 @@ local defaults = {
 		{ keys = "``", map = "<ESC>`>a`<ESC>`<i`<ESC>" },
 	},
 }
-
-return defaults

@@ -1,3 +1,4 @@
+-- Where the work happens
 local dtConfig = require("DoubleTap.config")
 local utils = require("DoubleTap.utils")
 
@@ -20,21 +21,20 @@ function CTX:reset()
 	self.ts_start_char = nil
 end
 
-
-local isInString = function(key, capture)
+function CTX:isInString(key, capture)
 	-- The capture must match and the ts_start_char must match the key,
 	-- then we consider the cursor to be in a string that is bound by the
 	-- current key
 	-- vim.print("isInString " .. key .. " : " .. tostring(capture))
 
-	if not ((key == CTX.ts_start_char) and CTX.ts_captures) then
+	if not ((key == self.ts_start_char) and self.ts_captures) then
 		-- vim.print("isInString false: does not match start char:" .. key .. " != " .. CTX.ts_start_char)
 		-- vim.print("isInString: or no capture:")
 		-- vim.print(CTX.ts_captures)
 		return false
 	end
 
-	for _, v in ipairs(CTX.ts_captures) do
+	for _, v in ipairs(self.ts_captures) do
 		if utils.hasEntry(capture, v) then
 			-- vim.print("isInString matched capture:" .. v)
 			return true
@@ -44,42 +44,42 @@ local isInString = function(key, capture)
 	return false
 end
 
-local isDoubleTap = function(spec)
+function CTX:isDoubleTap(spec)
 	local key = spec.key
 	local now = vim.fn.reltimefloat(vim.fn.reltime())
 
-	if key ~= CTX.last_key then
+	if key ~= self.last_key then
 		-- Not a DoubleTap (yet)
 		-- Store what's happened into the CTX so we can know if a DoubleTap occurs
 		-- on the next stroke
 
 		-- access the Treesitter information before the line is changed,
-    -- we need to look at the line as it is now, before anything is inserted.
-		CTX.last_key_ts = now
+		-- we need to look at the line as it is now, before anything is inserted.
+		self.last_key_ts = now
 
 		-- If there is an out condition, we'll need more information about
 		-- where the cursor is at for that condition to be tested later
 		if spec.out_condition then
 			-- Use Treesitter to find the fist character of the string,
-      -- which should be the first string delemiter character
+			-- which should be the first string delimiter character
 			local ts_node = vim.treesitter.get_node()
 
 			if ts_node then
 				local start_row, start_col = ts_node:start()
 				local start_line = vim.fn.getline(start_row + 1)
-				CTX.ts_start_char = string.sub(start_line, start_col, start_col)
-        CTX.ts_captures = vim.treesitter.get_captures_at_cursor(0)
-      -- vim.print("Start line: " .. start_line)
-      -- vim.print("Start char: " .. CTX.ts_start_char)
+				self.ts_start_char = string.sub(start_line, start_col, start_col)
+				self.ts_captures = vim.treesitter.get_captures_at_cursor(0)
+				-- vim.print("Start line: " .. start_line)
+				-- vim.print("Start char: " .. self.ts_start_char)
 			end
 		end
 
 		return false
 	end
 
-	local delta = now - CTX.last_key_ts
-	CTX.last_key_ts = now
-	if delta > CTX.config.threshold then
+	local delta = now - self.last_key_ts
+	self.last_key_ts = now
+	if delta > self.config.threshold then
 		-- To slow
 		return false
 	end
@@ -104,8 +104,6 @@ local jumpIn = function(key_spec)
 	vim.api.nvim_buf_set_lines(0, cur_row - 1, cur_row, false, { updated_line })
 
 	vim.fn.cursor({ cur_row, cur_col + string.len(key_spec.lhs) })
-
-	CTX:reset()
 end
 
 local jumpOut = function(key_spec)
@@ -145,16 +143,14 @@ local jumpOut = function(key_spec)
 
 	-- Now we jump
 	-- vim.api.nvim_win_set_cursor(0, { jump_to_row, jump_to_col })
-	vim.fn.cursor({jump_to_row, jump_to_col})
-
-	CTX:reset()
+	vim.fn.cursor({ jump_to_row, jump_to_col })
 end
 
 local jumpInOrOut = function(key_spec)
 	local key = key_spec.key
 	local capture = key_spec.out_condition
 
-	if isInString(key, capture) then
+	if CTX:isInString(key, capture) then
 		jumpOut(key_spec)
 	else
 		jumpIn(key_spec)
@@ -171,9 +167,11 @@ local dispatch_key = function(key)
 	return key
 end
 
-local process_auto_cmd = function(spec, func)
-	if isDoubleTap(spec) then
-		func(spec)
+local process_auto_cmd = function(spec, action_func)
+	if CTX:isDoubleTap(spec) then
+		action_func(spec)
+		-- Reset the state after taking action
+		CTX:reset()
 	else
 		vim.api.nvim_feedkeys(spec.key, "n", false)
 	end
@@ -200,7 +198,6 @@ local setup_insert_keymaps = function(opts)
 			process_auto_cmd(spec, jumpInOrOut)
 		end, { nowait = true, noremap = true })
 	end
-
 end
 
 local setup_visual_keymaps = function(opts)
@@ -216,7 +213,7 @@ end
 M.setup = function(opts)
 	CTX.config = dtConfig.setup_config(opts)
 
-  setup_visual_keymaps(CTX.config)
+	setup_visual_keymaps(CTX.config)
 	setup_insert_keymaps(CTX.config)
 end
 

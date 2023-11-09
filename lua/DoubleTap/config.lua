@@ -1,3 +1,4 @@
+-- Process the configuration
 local M = {}
 M.defaults = require("DoubleTap.defaults")
 
