@@ -9,78 +9,10 @@ local CTX = {
 	last_key_ts = 0,
 	last_key = "",
 	clean_lines = { "" },
+	ts_node = nil,
+	ts_captures = nil,
 	config = dtConfig.defaults,
 }
-
-local isInString = function(key)
-	local node = vim.treesitter.get_node()
-	vim.print(node)
-	vim.print(node:type())
-
-	local start_row, start_col, end_row, end_col = node:range()
-	vim.print(start_row .. ":" .. start_col .. ":" .. end_row .. ":" .. end_col)
-
-	local start_line = vim.api.nvim_buf_get_lines(0, start_row, start_row + 1, false)[1]
-	vim.print("start line " .. start_line)
-	local end_line = vim.api.nvim_buf_get_lines(0, end_row, end_row + 1, false)[1]
-	vim.print("end line " .. start_line)
-
-	local start_char = string.sub(start_line, start_col, start_col)
-	local end_char = string.sub(end_line, end_col, end_col)
-	--
-	vim.print("start char:" .. start_char)
-	vim.print("end char:" .. end_char)
-
-	if (key == start_char) or (key == end_char) then
-		vim.pritn("In string " .. key)
-		return true
-	end
-
-	return false
-
-	-- vim.print(node.start())
-	-- vim.print(node.end_)
-	-- vim.treesitter.get_node(0, row, col)
-	-- If the node is a string delem, return that char
-	-- otherwise, use the prev/next nodes to figure out the delim
-end
-
-local isDoubleTap = function(key)
-	local now = vim.fn.reltimefloat(vim.fn.reltime())
-
-	if not (key == CTX.last_key) then
-		-- Not a DoubleTap (yet)
-		-- Store what's happened into the CTX so we can know if a DoubleTap occurs
-		-- on the next stroke
-		-- vim.api.nvim_feedkeys(key, "n", false)
-
-		-- CTX.last_key = key
-		CTX.last_key_ts = now
-
-		-- vim.print("DoubleTap last key no match: " .. CTX.last_key .. key)
-		-- vim.print(CTX.last_key)
-		-- vim.print(key)
-		return false
-	end
-
-	local delta = now - CTX.last_key_ts
-	CTX.last_key_ts = now
-	if delta > CTX.config.threshold then
-		-- it's been to long, effectively reset our state.
-		-- CTX.last_key = key
-		-- restore the 'dirty' line
-		-- vim.api.nvim_buf_set_lines(0, c[1] - 1, c[1], false, orig_line)
-		-- CTX.clean_lines = orig_line
-		-- vim.api.nvim_feedkeys(key, "n", false)
-
-		vim.print("DoubleTap to slow " .. key)
-		-- To slow
-		return false
-	end
-
-	vim.print("DoubleTap valid match: " .. CTX.last_key .. key .. delta)
-	return true
-end
 
 local hasEntry = function(table, value)
 	vim.print("hasEntry: " .. type(table))
@@ -100,6 +32,125 @@ local hasEntry = function(table, value)
 
 	vim.print("hasEntry: false, bottom")
 	return false
+end
+
+local isInString = function(key, capture)
+	vim.print("isInString " .. key .. " : " .. tostring(capture))
+	if not (CTX.ts_node or CTX.ts_capture) then
+		vim.print("isInString: false, no node")
+		vim.print(CTX.ts_capture)
+		vim.print(CTX.ts_node)
+		-- No node to reference, ignore it
+		return false
+	end
+
+	local ts_captures = CTX.ts_capture
+	local ts_node = CTX.ts_node
+
+	vim.print(ts_captures)
+	vim.print(ts_node)
+	vim.print(ts_node:type())
+
+	local matched_capture = ""
+	for _, v in ipairs(ts_captures) do
+		if hasEntry(capture, v) then
+			vim.print("isInString matched capture:" .. v)
+			matched_capture = v
+		end
+	end
+
+	if matched_capture == "" then
+		return false
+	else
+		return true
+	end
+
+	-- do
+	-- 	return true
+	-- end
+	--
+	-- local node = vim.treesitter.get_node()
+	-- vim.print(node)
+	-- vim.print(node:type())
+	--
+	-- local start_row, start_col, end_row, end_col = node:range()
+	-- vim.print(start_row .. ":" .. start_col .. ":" .. end_row .. ":" .. end_col)
+	--
+	-- local start_line = vim.api.nvim_buf_get_lines(0, start_row, start_row + 1, false)[1]
+	-- vim.print("start line " .. start_line)
+	-- local end_line = vim.api.nvim_buf_get_lines(0, end_row, end_row + 1, false)[1]
+	-- vim.print("end line " .. start_line)
+	--
+	-- local start_char = string.sub(start_line, start_col, start_col)
+	-- local end_char = string.sub(end_line, end_col, end_col)
+	-- --
+	-- vim.print("start char:" .. start_char)
+	-- vim.print("end char:" .. end_char)
+	--
+	-- if (key == start_char) or (key == end_char) then
+	-- 	vim.print("In string " .. key)
+	-- 	return true
+	-- end
+	--
+	-- return false
+	--
+	-- -- vim.print(node.start())
+	-- -- vim.print(node.end_)
+	-- -- vim.treesitter.get_node(0, row, col)
+	-- -- If the node is a string delem, return that char
+	-- -- otherwise, use the prev/next nodes to figure out the delim
+end
+
+local isDoubleTap = function(key)
+	local now = vim.fn.reltimefloat(vim.fn.reltime())
+
+	if not (key == CTX.last_key) then
+		-- Not a DoubleTap (yet)
+		-- Store what's happened into the CTX so we can know if a DoubleTap occurs
+		-- on the next stroke
+		-- vim.api.nvim_feedkeys(key, "n", false)
+
+		-- CTX.last_key = key
+		CTX.last_key_ts = now
+
+		-- vim.print("DoubleTap last key no match: " .. CTX.last_key .. key)
+		-- vim.print(CTX.last_key)
+		-- vim.print(key)
+		-- Remember the node we're at so we can easily reference it later
+		-- and access the ts node of before the line was changed
+		CTX.ts_node = vim.treesitter.get_node()
+		CTX.ts_capture = vim.treesitter.get_captures_at_cursor(0)
+
+		vim.print("remember capture and node: ")
+		vim.print(CTX.ts_capture)
+		vim.print(CTX.ts_node)
+
+		return false
+	end
+
+	local delta = now - CTX.last_key_ts
+	CTX.last_key_ts = now
+	if delta > CTX.config.threshold then
+		-- it's been to long, effectively reset our state.
+		-- CTX.last_key = key
+		-- restore the 'dirty' line
+		-- vim.api.nvim_buf_set_lines(0, c[1] - 1, c[1], false, orig_line)
+		-- CTX.clean_lines = orig_line
+		-- vim.api.nvim_feedkeys(key, "n", false)
+
+		vim.print("DoubleTap to slow " .. key)
+		-- To slow
+		return false
+	end
+
+	vim.print("DoubleTap valid match: " .. CTX.last_key .. key .. delta)
+	-- vim.print("isInString: " .. tostring(isInString(key)))
+
+	-- Squash the time stamp down so a quick 3rd key doesn't sneek in.
+	-- We'll have to change this when we need to support some triples
+	--   like '"""' in Python
+	CTX.last_key_ts = 0
+	return true
 end
 
 local canJumpOut = function(capture, row, col)
@@ -136,12 +187,7 @@ local canJumpOut = function(capture, row, col)
 	return false
 end
 
-local jumpIn = function(key, key_spec)
-	if not isDoubleTap(key) then
-		vim.api.nvim_feedkeys(key, "n", false)
-		return
-	end
-
+local jumpIn = function(key_spec)
 	-- Splice the current line, removing the existing key from the previous input
 	-- and splice in the lhs and rhs values for this key spec and then position the
 	-- cursor into the middle of the splice point
@@ -158,70 +204,8 @@ local jumpIn = function(key, key_spec)
 	vim.fn.cursor({ cur_row, cur_col + string.len(key_spec.lhs) })
 end
 
-local jumpOut = function(key, key_spec)
-	-- isInString(key)
-
-	-- do
-	-- 	vim.api.nvim_feedkeys(key, "n", false)
-	-- 	return
-	-- end
-	-- local now = vim.fn.reltimefloat(vim.fn.reltime())
-	--
-	-- -- The clean_line is the current line that's being edited before any
-	-- -- DoubleTap chars are inserted into it.
-	-- -- If a jumpOot occurs, we need to restore the clean_line into the buffer
-	-- -- local cur_pos = vim.api.nvim_win_get_cursor(0)
-	-- -- local row, col = unpack(cur_pos)
-	-- -- local clean_line = vim.api.nvim_buf_get_lines(0, row - 1, col, false)
-	-- -- CTX.clean_lines = clean_line
-	--
-	-- -- If this char does match a previously stored char, we
-	-- -- are at the first state and this current line needs to be preserved
-	-- -- in case we perform a jump out and need to return the line back to it's original state
-	-- if not (key == CTX.last_key) then
-	-- 	-- Not a DoubleTap (yet)
-	-- 	-- Store what's happened into the CTX so we can know if a DoubleTap occurs
-	-- 	-- on the next stroke
-	-- 	vim.api.nvim_feedkeys(key, "n", false)
-	--
-	-- 	-- CTX.last_key = key
-	-- 	CTX.last_key_ts = now
-	--
-	-- 	vim.print("DoubleTap last key no match: " .. CTX.last_key .. key)
-	-- 	-- vim.print(CTX.last_key)
-	-- 	-- vim.print(key)
-	-- 	return
-	-- end
-	-- vim.print("DoubleTap, :" .. CTX.last_key .. key .. "got double char")
-	--
-	-- -- See if happened fast enough!
-	-- local delta = now - CTX.last_key_ts
-	-- CTX.last_key_ts = now
-	-- if delta > CTX.config.threshold then
-	-- 	-- it's been to long, effectively reset our state.
-	-- 	-- CTX.last_key = key
-	-- 	-- restore the 'dirty' line
-	-- 	-- vim.api.nvim_buf_set_lines(0, c[1] - 1, c[1], false, orig_line)
-	-- 	-- CTX.clean_lines = orig_line
-	-- 	vim.api.nvim_feedkeys(key, "n", false)
-	--
-	-- 	vim.print("DoubleTap to slow " .. key)
-	-- 	-- To slow
-	-- 	return
-	-- end
-
-	if not isDoubleTap(key) then
-		vim.api.nvim_feedkeys(key, "n", false)
-		return
-	end
-
-	-- vim.print("DoubleTap valid match: " .. CTX.last_key .. key .. delta)
-
-	-- * Need to see if we can find a place to jump to
-	-- * If a jump is found
-	-- * Edit the current line to remove the double chars
-	-- * If the jump pos is on the same line, adjust it's column pos
-	-- * Move the cursor to the jump pos
+local jumpOut = function(key_spec)
+	local key = key_spec.key
 
 	-- If the jump to char is at the cursor, just move over one, otherwise search
 	local cur_pos = vim.api.nvim_win_get_cursor(0)
@@ -375,11 +359,26 @@ local jumpOut = function(key, key_spec)
 	-- vim.api.nvim_feedkeys(key, "t", true)
 end
 
-local dispatch_key = function(key)
-	-- CTX.last_key = key
-	-- CTX.last_key =vim.api.nvim_replace_termcodes(key, true, true, true)
+local jumpInOrOut = function(key_spec)
+	vim.print(CTX.ts_captures)
+	vim.print(CTX.ts_node)
 
-	-- Use a cheesy method to filter down to keys we care about
+	local key = key_spec.key
+	local capture = key_spec.out_condition
+
+	if isInString(key, capture) then
+		vim.print("jumpInOrOut: Out")
+		jumpOut(key_spec)
+	else
+		vim.print("jumpInOrOut: In")
+		jumpIn(key_spec)
+	end
+	-- vim.api.nvim_feedkeys(key, "n", false)
+end
+
+local dispatch_key = function(key)
+	-- Use a cheesy method to filter down to keys we care about.
+	-- Track keys to look for doubles in the auto commands
 	if vim.fn.strlen(key) == 1 then
 		CTX.last_key = key
 		-- vim.print("dispatch_key last key ->", key)
@@ -399,22 +398,41 @@ local setup_auto_commands = function(opts)
 		-- vim.print("key: " .. val.key)
 		-- vim.print("capture: ", val.capture)
 		vim.keymap.set("i", spec.key, function()
-			jumpOut(spec.key, spec)
-			-- local k = spec.key
-			--    local s = spec
-			-- jumpOut(k, s)
-		end)
+			local key = spec.key
+
+			if not isDoubleTap(key) then
+				vim.api.nvim_feedkeys(key, "n", false)
+				return
+			end
+
+			jumpOut(spec)
+		end, { nowait = true, noremap = true })
 	end
 
 	for _, spec in ipairs(opts.jump_in) do
-		-- vim.print("key: " .. val.key)
-		-- vim.print("capture: ", val.capture)
 		vim.keymap.set("i", spec.key, function()
-			jumpIn(spec.key, spec)
-			-- local k = spec.key
-			--    local s = spec
-			-- jumpOut(k, s)
-		end)
+			local key = spec.key
+
+			if not isDoubleTap(key) then
+				vim.api.nvim_feedkeys(key, "n", false)
+				return
+			end
+
+			jumpIn(spec)
+		end, { nowait = true, noremap = true })
+	end
+
+	for _, spec in ipairs(opts.jump_in_or_out) do
+		vim.keymap.set("i", spec.key, function()
+			local key = spec.key
+
+			if not isDoubleTap(key) then
+				vim.api.nvim_feedkeys(key, "n", false)
+				return
+			end
+
+			jumpInOrOut(spec)
+		end, { nowait = true, noremap = true })
 	end
 end
 
