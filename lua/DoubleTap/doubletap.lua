@@ -28,7 +28,7 @@ function CTX:isInString(key, capture)
 	-- vim.print("isInString " .. key .. " : " .. tostring(capture))
 
 	if not ((key == self.ts_start_char) and self.ts_captures) then
-		-- vim.print("isInString false: does not match start char:" .. key .. " != " .. CTX.ts_start_char)
+		vim.print("isInString false: does not match start char:" .. key .. " != " .. CTX.ts_start_char)
 		-- vim.print("isInString: or no capture:")
 		-- vim.print(CTX.ts_captures)
 		return false
@@ -36,7 +36,7 @@ function CTX:isInString(key, capture)
 
 	for _, v in ipairs(self.ts_captures) do
 		if utils.hasEntry(capture, v) then
-			-- vim.print("isInString matched capture:" .. v)
+			vim.print("isInString matched capture:" .. v)
 			return true
 		end
 	end
@@ -67,9 +67,10 @@ function CTX:isDoubleTap(spec)
 			if ts_node then
 				local start_row, start_col = ts_node:start()
 				local start_line = vim.fn.getline(start_row + 1)
-				self.ts_start_char = string.sub(start_line, start_col, start_col)
+				self.ts_start_char = string.sub(start_line, start_col + 1, start_col + 1)
 				self.ts_captures = vim.treesitter.get_captures_at_cursor(0)
 				-- vim.print("Start line: " .. start_line)
+				-- vim.print("Start row: " .. start_row .. ", col: " .. start_col)
 				-- vim.print("Start char: " .. self.ts_start_char)
 			end
 		end
@@ -116,12 +117,12 @@ local jumpOut = function(key_spec)
 	local dirty_lines = vim.api.nvim_buf_get_lines(0, row - 1, row, false)
 
 	if string.sub(dirty_lines[1], col + 1, col + 1) == key then
-		-- vim.print("Under cursor:" .. string.sub(dirty_lines[1], col + 1, col + 1))
+		vim.print("Under cursor:" .. string.sub(dirty_lines[1], col + 1, col + 1))
 		jump_to_col = jump_to_col + 1
 	else
 		jump_to_row, jump_to_col = unpack(vim.fn.searchpos(key, "nWz"))
 		if jump_to_row == 0 and jump_to_col == 0 then
-			-- vim.print("Jump to pos not found: " .. jump_to_row .. " " .. jump_to_col)
+			vim.print("Jump to pos not found, need to searchpos: " .. jump_to_row .. " " .. jump_to_col)
 			vim.api.nvim_feedkeys(key, "n", false)
 			return
 		end
