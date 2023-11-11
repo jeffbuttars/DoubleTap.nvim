@@ -1,6 +1,9 @@
 -- Declare configuration defaults
 return {
 	threshold = 0.35, -- In seconds
+
+	-- Enable stepping over a rhs if the cursor is in front of it and a single rhs is typed
+	walkout = true,
 	jump_out = {
 		{ key = ")" },
 		{ key = "}" },
