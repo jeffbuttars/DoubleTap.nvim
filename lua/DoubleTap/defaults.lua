@@ -10,8 +10,10 @@ return {
 		{ key = "]" },
 	},
 	jump_in = {
-		{ key = "(", lhs = "( ", rhs = " )" },
-		{ key = "{", lhs = "{ ", rhs = " }" },
+		-- { key = "(", lhs = "( ", rhs = " )" },
+		-- { key = "{", lhs = "{ ", rhs = " }" },
+		{ key = "(", lhs = "(", rhs = ")" },
+		{ key = "{", lhs = "{", rhs = "}" },
 		{ key = "[", lhs = "[", rhs = "]" },
 	},
 	jump_in_or_out = {
