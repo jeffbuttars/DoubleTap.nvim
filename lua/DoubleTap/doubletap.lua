@@ -42,7 +42,7 @@ function CTX:isInCapture(key, capture)
 	local ts_start_char = string.sub(start_line, start_col, start_col)
 
 	if not ((key == ts_start_char) and self.ts_captures) then
-		vim.print("isInCapture false: does not match start char:" .. key .. " != " .. ts_start_char)
+		-- vim.print("isInCapture false: does not match start char:" .. key .. " != " .. ts_start_char)
 		-- vim.print("isInCapture: or no capture:")
 		-- vim.print(CTX.ts_captures)
 		return false
@@ -50,7 +50,7 @@ function CTX:isInCapture(key, capture)
 
 	for _, v in ipairs(self.ts_captures) do
 		if utils.hasEntry(capture, v) then
-			vim.print("isInCapture matched capture:" .. v)
+			-- vim.print("isInCapture matched capture:" .. v)
 			return true
 		end
 	end
@@ -88,13 +88,13 @@ function CTX:isDoubleTap(spec)
 		local next_char = string.sub(CTX.clean_line, cur_col + 1, cur_col + 1)
 
 		-- vim.print("Next CHAR: " .. cur_col)
-		vim.print("Next CHAR: " .. cur_col .. " : " .. next_char)
+		-- vim.print("Next CHAR: " .. cur_col .. " : " .. next_char)
 
 		if CTX.ts_node then
-			local start_row, start_col = CTX.ts_node:start()
+			local start_row, _ = CTX.ts_node:start()
 			local end_row, end_col = CTX.ts_node:end_()
 			local end_line = vim.fn.getline(end_row + 1)
-			vim.print("End line: " .. end_line)
+			-- vim.print("End line: " .. end_line)
 
 			-- capture the end_char now on the 'clean' line
 			if end_row == start_row then
@@ -102,19 +102,19 @@ function CTX:isDoubleTap(spec)
 			else
 				CTX.ts_end_char = string.sub(end_line, end_col, end_col)
 			end
-			vim.print("ts_end_char: " .. CTX.ts_end_char)
+			-- vim.print("ts_end_char: " .. CTX.ts_end_char)
 
 			if (cur_row - 1) == end_row then
 				-- Save this to help determine a walkout later
 				CTX.next_char_matches = next_char == key
-				vim.print("next_char_matches: '" .. next_char .. "':'" .. key .. "'")
+				-- vim.print("next_char_matches: '" .. next_char .. "':'" .. key .. "'")
 			end
 
 			self.ts_captures = vim.treesitter.get_captures_at_cursor(0)
-			vim.print("Start row: " .. start_row .. ", col: " .. start_col)
-			vim.print("End row: " .. end_row .. ", col: " .. end_col)
-			vim.print("Next char: " .. (CTX.next_char_matches and key or ""))
-			vim.print("Node End char: " .. CTX.ts_end_char)
+			-- vim.print("Start row: " .. start_row .. ", col: " .. start_col)
+			-- vim.print("End row: " .. end_row .. ", col: " .. end_col)
+			-- vim.print("Next char: " .. (CTX.next_char_matches and key or ""))
+			-- vim.print("Node End char: " .. CTX.ts_end_char)
 		end
 
 		return false
@@ -149,8 +149,8 @@ local jumpIn = function(key_spec)
 	vim.fn.cursor({ cur_row, cur_col + string.len(key_spec.lhs) })
 end
 
-local walkOut = function(key_spec)
-	vim.print("jumpOut WALKING")
+local walkOut = function()
+	-- vim.print("jumpOut WALKING")
 	local row, col = CTX.cur_pos_row, CTX.cur_pos_col
 	local jump_to_row, jump_to_col = row, col
 
@@ -178,17 +178,17 @@ local jumpOut = function(key_spec)
 		jump_to_row, jump_to_col = CTX.ts_node:end_()
 		jump_to_row = jump_to_row + 1
 		jump_to_col = jump_to_col + 1
-		vim.print("jumpOut, end from node: " .. CTX.ts_end_char .. ", " .. jump_to_row .. ":" .. jump_to_col)
+		-- vim.print("jumpOut, end from node: " .. CTX.ts_end_char .. ", " .. jump_to_row .. ":" .. jump_to_col)
 	elseif string.sub(dirty_lines[1], col + 1, col + 1) == key then
 		-- If the jump to char is at the cursor, just move over one, otherwise search
-		vim.print("jumpOut, Under cursor:" .. string.sub(dirty_lines[1], col + 1, col + 1))
+		-- vim.print("jumpOut, Under cursor:" .. string.sub(dirty_lines[1], col + 1, col + 1))
 		jump_to_col = jump_to_col + 1
 	else
 		-- Use searchpos to pick the naive jump position
-		vim.print("jumpOut, no node end info, searchpos")
+		-- vim.print("jumpOut, no node end info, searchpos")
 		jump_to_row, jump_to_col = unpack(vim.fn.searchpos(key, "nWz"))
 		if jump_to_row == 0 and jump_to_col == 0 then
-			vim.print("jumpOut, Jump to pos not found, need to searchpos: " .. jump_to_row .. " " .. jump_to_col)
+			-- vim.print("jumpOut, Jump to pos not found, need to searchpos: " .. jump_to_row .. " " .. jump_to_col)
 			vim.api.nvim_feedkeys(key, "n", false)
 			return
 		end
@@ -202,6 +202,7 @@ local jumpOut = function(key_spec)
 	vim.api.nvim_buf_set_lines(0, row - 1, row, false, { CTX.clean_line })
 
 	-- Now we jump
+	--
 	vim.fn.cursor({ jump_to_row, jump_to_col })
 end
 
@@ -233,8 +234,8 @@ local process_auto_cmd = function(spec, action_func)
 		CTX:reset()
 	elseif CTX.next_char_matches and CTX.config.walkout and action_func ~= jumpIn then
 		-- See if we can should 'walkout'
-		vim.print("WALKOUT!")
-		walkOut(spec)
+		-- vim.print("WALKOUT!")
+		walkOut()
 		CTX:reset()
 	else
 		vim.api.nvim_feedkeys(spec.key, "n", false)
