@@ -37,6 +37,10 @@ function CTX:isInCapture(key, capture)
 	-- current key
 	-- vim.print("isInCapture " .. key .. " : " .. tostring(capture))
 
+	if not CTX.ts_node then
+		return false
+	end
+
 	local start_row, start_col = CTX.ts_node:start()
 	local start_line = vim.fn.getline(start_row + 1)
 	local ts_start_char = string.sub(start_line, start_col, start_col)
@@ -61,6 +65,7 @@ end
 function CTX:isDoubleTap(spec)
 	local key = spec.key
 	local now = vim.fn.reltimefloat(vim.fn.reltime())
+	local call_is_good = false
 
 	CTX.cur_pos_row, CTX.cur_pos_col = unpack(vim.api.nvim_win_get_cursor(0))
 
@@ -79,7 +84,11 @@ function CTX:isDoubleTap(spec)
 
 		-- Use Treesitter to find the fist character of the string,
 		-- which should be the first string delimiter character
-		CTX.ts_node = vim.treesitter.get_node()
+		call_is_good, CTX.ts_node = pcall(vim.treesitter.get_node)
+		if not call_is_good then
+			CTX.ts_node = nil
+		end
+
 		CTX.clean_line = vim.fn.getline(".")
 		CTX.cur_pos_row, CTX.cur_pos_col = unpack(vim.api.nvim_win_get_cursor(0))
 		local cur_row = CTX.cur_pos_row
