@@ -21,6 +21,10 @@ return {
 		{ key = '"', lhs = '"', rhs = '"', out_condition = { "string", "string.documentation" } },
 		{ key = "`", lhs = "`", rhs = "`", out_condition = { "string", "string.documentation" } },
 	},
+	finish_line = {
+		{ key = ",", rhs = ",", cursor_to_end = true },
+		{ key = ";", rhs = ";", cursor_to_end = true },
+	},
 
 	-- Enclosing/Surrounding character mappings, visually select then double tap the
 	-- character to enclose the selections
@@ -35,5 +39,13 @@ return {
 		{ keys = '""', map = '<ESC>`>a"<ESC>`<i"<ESC>' },
 		{ keys = "''", map = "<ESC>`>a'<ESC>`<i'<ESC>" },
 		{ keys = "``", map = "<ESC>`>a`<ESC>`<i`<ESC>" },
+	},
+
+	filetypes = {
+		go = {
+			jump_in = {
+				{ key = "{", lhs = "{\n", rhs = "}" },
+			},
+		},
 	},
 }

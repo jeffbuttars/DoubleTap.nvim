@@ -8,6 +8,7 @@ local M = {}
 -- context/state
 local CTX = {
 	config = dtConfig.defaults,
+	ft_configs = {},
 	ts_node = nil,
 	ts_end_char = nil,
 	last_key_ts = 0,
@@ -63,6 +64,7 @@ function CTX:isInCapture(key, capture)
 end
 
 function CTX:isDoubleTap(spec)
+	-- vim.print("isDoubleTap: ", spec)
 	local key = spec.key
 	local now = vim.fn.reltimefloat(vim.fn.reltime())
 	local call_is_good = false
@@ -124,6 +126,12 @@ function CTX:isDoubleTap(spec)
 			-- vim.print("End row: " .. end_row .. ", col: " .. end_col)
 			-- vim.print("Next char: " .. (CTX.next_char_matches and key or ""))
 			-- vim.print("Node End char: " .. CTX.ts_end_char)
+		else
+			-- if there is no TS node found, use other methods to determine our context
+			-- Save this to help determine a walkout later
+			CTX.next_char_matches = next_char == key
+			-- vim.print("next_char_matches: '" .. next_char .. "':'" .. key .. "'")
+			-- stifu
 		end
 
 		return false
@@ -139,6 +147,30 @@ function CTX:isDoubleTap(spec)
 	-- vim.print("DoubleTap valid match: " .. CTX.last_key .. key .. delta)
 	-- vim.print("isInCapture: " .. tostring(isInCapture(key)))
 	return true
+end
+
+local finishLine = function(spec)
+	local finish_char = spec.rhs
+	local cur_row = CTX.cur_pos_row
+
+	-- Trim white space from the end of the line
+	local updated_line = CTX.clean_line:match("^(.-)%s*$")
+
+	-- A finish_char, 'rhs' is not required
+	-- If there is a finish char, and it's not already there, add it.
+	if finish_char then
+		if updated_line:sub(-1) ~= finish_char then
+			-- vim.print("finishLine:", updated_line:sub(-1), finish_char)
+			updated_line = updated_line .. finish_char
+		end
+	end
+
+	if spec.cursor_to_end then
+    -- Set the cursor to the end of the line
+		vim.fn.cursor({ cur_row, string.len(updated_line) + 1 })
+	end
+
+	vim.api.nvim_buf_set_lines(0, cur_row - 1, cur_row, false, { updated_line })
 end
 
 local jumpIn = function(key_spec)
@@ -237,7 +269,9 @@ local dispatch_key = function(key)
 end
 
 local process_auto_cmd = function(spec, action_func)
+	-- vim.print("process_auto_cmd dt", spec.key)
 	if CTX:isDoubleTap(spec) then
+		-- vim.print("process_auto_cmd dt", spec.key)
 		action_func(spec)
 		-- Reset the state after taking action
 		CTX:reset()
@@ -272,6 +306,15 @@ local setup_insert_keymaps = function(opts)
 			process_auto_cmd(spec, jumpInOrOut)
 		end, { nowait = true, noremap = true })
 	end
+
+	vim.print("setup_insert_keymaps finishLine")
+	vim.print(opts.finish_line)
+	for _, spec in ipairs(opts.finish_line) do
+		vim.print("Finishline for key ", spec.key)
+		vim.keymap.set("i", spec.key, function()
+			process_auto_cmd(spec, finishLine)
+		end, { nowait = true, noremap = true })
+	end
 end
 
 local setup_visual_keymaps = function(opts)
@@ -284,11 +327,51 @@ local setup_visual_keymaps = function(opts)
 	end
 end
 
+local set_current_config = function(ctx)
+	-- look for filetype overrides
+	local buf_nr = vim.api.nvim_get_current_buf()
+	local filetype = vim.bo[buf_nr].filetype
+
+	local current_config = ctx.config
+
+	-- vim.print("DoubleTap set_current_config BNR", buf_nr)
+	-- vim.print("DoubleTap set_current_config FT", filetype)
+	--
+	-- if ctx.config.filetypes[filetype] then
+	-- 	vim.print("FT Cconfig:", ctx.config.filetypes[filetype])
+	--
+	-- 	if not ctx.ft_configs[filetype] then
+	-- 		local ft_config = vim.tbl_deep_extend("force", ctx.config, ctx.config.filetypes[filetype])
+	-- 		ctx.ft_configs[filetype] = ft_config
+	-- 	end
+	--
+	-- 	current_config = ctx.ft_configs[filetype]
+	--
+	-- 	vim.print("DoubleTap set_current_config FT", current_config)
+	-- end
+
+	setup_visual_keymaps(current_config)
+	setup_insert_keymaps(current_config)
+end
+
+local setup_auto_cmds = function(ctx)
+	-- vim.print("DoubleTap setup_auto_cmds...")
+	vim.api.nvim_create_augroup("DoubleTapAugroup", {
+		clear = true,
+	})
+
+	vim.api.nvim_create_autocmd("BufEnter", {
+		desc = "DoubleTap FT specific checks and config setup",
+		group = "DoubleTapAugroup",
+		callback = function(opts)
+			set_current_config(ctx)
+		end,
+	})
+end
+
 M.setup = function(opts)
 	CTX.config = dtConfig.setup_config(opts)
-
-	setup_visual_keymaps(CTX.config)
-	setup_insert_keymaps(CTX.config)
+	setup_auto_cmds(CTX)
 end
 
 return M
